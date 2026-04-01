@@ -1,0 +1,24 @@
+_target_: src.models.toy_module.BiModalLightningModule
+
+defaults:
+  - _self_
+  - net: toy
+
+
+loss_name: mse
+huber_delta: 1.0
+compile_model: false
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-3
+  weight_decay: 1e-5
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.5
+  patience: 10
+  min_lr: 1e-6

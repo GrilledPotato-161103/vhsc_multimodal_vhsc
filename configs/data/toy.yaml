@@ -1,0 +1,15 @@
+_target_: src.data.toy_datamodule.ToyBiModalDataModule
+
+expression: "x1**2 + 2*x2 + torch.sin(3*x1) + 0.5*x1*x2"
+n_samples: 10000
+batch_size: 32
+num_workers: 2
+
+val_ratio: 0.1
+test_ratio: 0.1
+
+x1_range: [-1.0, 1.0]
+x2_range: [-1.0, 1.0]
+
+noise_std: 0.05
+seed: 42
