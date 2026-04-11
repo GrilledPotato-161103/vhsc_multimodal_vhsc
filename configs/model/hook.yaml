@@ -1,0 +1,33 @@
+_target_: src.models.hook_module.ModelInjectModule
+_partial_: True
+
+recon_bp: reconstructor.0
+unc_bp: uncertainty.0
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 0.0005
+  weight_decay: 0.000001
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.1
+  patience: 10
+
+compile: False
+
+recon_criterion:
+  _target_: torch.nn.MSELoss
+
+unc_criterion:
+  _target_: src.plugins.head.bayescap.BayesCap1DLoss
+  lambda_identity: 1.0
+  lambda_nll: 0.05
+  identity_mode: l2
+  nll_mode: paper
+
+epoch_phase: 10
+mask_rate: 0.3

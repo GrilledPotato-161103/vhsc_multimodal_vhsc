@@ -91,6 +91,13 @@ def _format_dataclass(obj: Any, title: str, fields: Dict[str, Any]) -> str:
 
 # To store Breakpoint runtime context
 @dataclass
+class BreakpointConfig:
+    target: str
+    pos: str
+    breakpoint: Any
+
+
+@dataclass
 class BreakpointContext:
     name: str
     layer: str
@@ -126,6 +133,7 @@ class BreakpointContext:
 @dataclass
 class BreakpointOutput:    
     fn_name: str
+    context: BreakpointContext | None = None
     output: Dict | List[torch.Tensor] | torch.Tensor | None = None
     trace: Dict | List[torch.Tensor] | torch.Tensor | None = None
     valid: bool = False 
@@ -136,6 +144,7 @@ class BreakpointOutput:
             "BreakpointOutput",
             {
                 "fn_name": self.fn_name,
+                "context": self.context,
                 "output": self.output,
                 "trace": self.trace,
                 "valid": self.valid

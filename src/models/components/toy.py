@@ -15,6 +15,14 @@ def get_activation(name: Literal["relu", "gelu", "silu"]) -> nn.Module:
         return nn.SiLU()
     raise ValueError(f"Unsupported activation: {name}")
 
+class Residual(nn.Module):
+    def __init__(self, blocks: nn.Module):
+        super().__init__()
+        self.blocks = blocks
+    
+    def forward(self, x):
+        x1 = self.blocks(x)
+        return x + x1
 
 class MLP(nn.Module):
     def __init__(
@@ -25,6 +33,7 @@ class MLP(nn.Module):
         activation: Literal["relu", "gelu", "silu"] = "gelu",
         dropout: float = 0.0,
         use_norm: bool = False,
+        residual: bool = False
     ) -> None:
         super().__init__()
 
@@ -32,12 +41,17 @@ class MLP(nn.Module):
         prev_dim = in_dim
 
         for h in hidden_dims:
-            layers.append(nn.Linear(prev_dim, h))
+            sub_layers: list[nn.Module] = []
+            sub_layers.append(nn.Linear(prev_dim, h))
             if use_norm:
-                layers.append(nn.LayerNorm(h))
-            layers.append(get_activation(activation))
+                sub_layers.append(nn.LayerNorm(h))
+            sub_layers.append(get_activation(activation))
             if dropout > 0:
-                layers.append(nn.Dropout(dropout))
+                sub_layers.append(nn.Dropout(dropout))
+            block = nn.Sequential(*sub_layers)
+            if residual and (prev_dim == h):
+                block = Residual(block)
+            layers.append(block)
             prev_dim = h
 
         layers.append(nn.Linear(prev_dim, out_dim))
@@ -45,7 +59,6 @@ class MLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
-
 
 class BiModalRegressor(nn.Module):
     """
@@ -69,6 +82,7 @@ class BiModalRegressor(nn.Module):
         activation: Literal["relu", "gelu", "silu"] = "gelu",
         dropout: float = 0.0,
         use_norm: bool = False,
+        use_residual: bool = False
     ) -> None:
         super().__init__()
 
@@ -82,6 +96,7 @@ class BiModalRegressor(nn.Module):
             activation=activation,
             dropout=dropout,
             use_norm=use_norm,
+            residual=use_residual
         )
 
         self.x2_encoder = MLP(
@@ -91,6 +106,7 @@ class BiModalRegressor(nn.Module):
             activation=activation,
             dropout=dropout,
             use_norm=use_norm,
+            residual=use_residual
         )
 
         fusion_in_dim = latent_dim * 4
@@ -102,6 +118,7 @@ class BiModalRegressor(nn.Module):
             activation=activation,
             dropout=dropout,
             use_norm=use_norm,
+            residual=use_residual
         )
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:

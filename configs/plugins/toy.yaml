@@ -1,0 +1,39 @@
+target: BiModalRegressor
+model_checkpoint: data/checkpoints/toy.pth
+plugins_checkpoint: null
+breakpoints:
+  - layer_name: head
+    bp: 
+      _target_: src.plugins.hook.Breakpoint
+      name: reconstructor
+      callback: 
+        _target_: src.plugins.reconstructor.linear.BilinearReconstructor
+        d_1: 64
+        d_2: 64
+        hidden_dim: 32
+        activation: relu
+        norm: layernorm
+        dropout: 0.3
+        order: adn
+        concat: true
+        dist: 
+          _target_: torch.nn.L1Loss
+          reduction: none
+      mutate: true
+      valid: true
+    pos: before
+  
+  - layer_name: head
+    bp: 
+      _target_: src.plugins.hook.Breakpoint
+      name: uncertainty
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        hidden_dims: [16, 16]
+        per_dim_uncertainty: False
+      mutate: false
+      valid: true
+    pos: after
+
+

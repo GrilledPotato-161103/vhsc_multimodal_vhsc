@@ -6,6 +6,7 @@ import math
 
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
+import numpy as np
 
 try:
     import lightning as L
@@ -130,8 +131,13 @@ class BPInjectDataset(Dataset):
     
     def __getitem__(self, idx: int):
         inputs, y = self.dataset[idx]
-        signal = torch.multinomial((self.rate, 1 - self.rate), num_samples=len(inputs)).numpy().tolist()
-        return inputs, y, {self.bp_name : signal}
+        signal = [1, 1]
+        index = np.random.choice(3, p=[1 - self.rate, self.rate / 2, self.rate / 2])
+        if index > 0:
+            inputs = list(inputs)
+            signal[index - 1] = 0
+            inputs[index - 1] = torch.rand_like(inputs[index - 1])
+        return tuple(inputs), y, {self.bp_name : torch.Tensor([signal])}
 
 
 

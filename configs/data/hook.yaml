@@ -1,7 +1,7 @@
-_target_: src.data.toy_datamodule.ToyBiModalDataModule
+_target_: src.data.toy_datamodule.ToyBiModalInjectDataModule
 
 expression: "x1**2 + 2*x2 + torch.sin(3*x1) + 0.5*x1*x2"
-n_samples: 100000
+n_samples: 128
 batch_size: 32
 num_workers: 2
 
@@ -11,5 +11,7 @@ test_ratio: 0.1
 x1_range: [-1.0, 1.0]
 x2_range: [-1.0, 1.0]
 
-noise_std: 0.05
+noise_std: 0.1
 seed: 42
+offrate: 0.3
+bp_name: "reconstructor.0"

@@ -5,10 +5,12 @@ import torch.nn as nn
 from dataclasses import dataclass
 from collections import defaultdict
 from typing import Dict, Optional, Any, Callable, Union, List, Tuple
+from omegaconf import DictConfig
+from hydra.utils import instantiate
 
 import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
-from src.plugins.var import BreakpointContext, BreakpointOutput
+from src.plugins.var import BreakpointContext, BreakpointOutput, _format_dataclass
 
 class Breakpoint(nn.Module):
     list_of_breakpoints: Dict[str, Breakpoint] = defaultdict(list)
@@ -29,6 +31,19 @@ class Breakpoint(nn.Module):
         self.kwargs = kwargs
         Breakpoint.list_of_breakpoints[name].append(self)
         self.name = f"{name}.{len(Breakpoint.list_of_breakpoints[name]) - 1}"
+    
+    def __str__(self):
+        return _format_dataclass(
+            self,
+            "Breakpoint",
+            {   
+                "name": self.name,
+                "callback": self.callback,
+                "mutate": self.mutate, 
+                "valid": self.valid,
+                "kwargs": self.kwargs,
+            },
+        )
 
     @staticmethod
     def get_by_name(query):
@@ -103,10 +118,20 @@ class Breakpoint(nn.Module):
 
 
 class BreakpointController:
+
     def __init__(self):
         self.breakpoints: List[Dict[str, Any]] = []
         self.handles: List[Any] = []
         self.state: Dict[str, Any] = {}
+
+    @staticmethod
+    def __init_dict__(model: nn.Module, cfg: DictConfig) -> BreakpointController:
+        controller = BreakpointController()
+        assert type(model).__name__ == cfg.target, "Plugins are going to be plugged into wrong model."
+        for item in cfg.breakpoints: 
+            bp = instantiate(item.bp)
+            controller.add_breakpoint_by_name(model, item.layer_name, bp, item.pos)
+        return controller
 
     @staticmethod
     def _named_modules_map(root: nn.Module) -> Dict[str, nn.Module]:
@@ -222,14 +247,26 @@ class BreakpointController:
         return self.add_breakpoint(root=root, target=layer_name, bp=bp, position=position)
 
     def eval(self):
-        for bp in self.breakpoints:
-            if isinstance(bp.callback, nn.Module):
-                bp.callback.eval()
+        for item in self.breakpoints:
+            if isinstance(item["breakpoint"].callback, nn.Module):
+                item["breakpoint"].callback.eval()
     
     def train(self):
-        for bp in self.breakpoints:
-            if isinstance(bp.callback, nn.Module):
-                bp.callback.train()
+        for item in self.breakpoints:
+            if isinstance(item["breakpoint"].callback, nn.Module):
+                item["breakpoint"].callback.train()
+    
+    def to(self, device:str):
+        for item in self.breakpoints:
+            if isinstance(item["breakpoint"].callback, nn.Module):
+                item["breakpoint"].callback.to(device)
+
+    def cuda(self):
+        for item in self.breakpoints:
+            if isinstance(item["breakpoint"].callback, nn.Module):
+                item["breakpoint"].callback.cuda()
+    
+
                 
     
     def add_breakpoint_by_module(
@@ -370,71 +407,32 @@ if __name__ == "__main__":
     import torch
     import torch.nn as nn
     from torchvision.models import resnet18
+    import hydra
+    from omegaconf import OmegaConf
 
-    model = resnet18()
-
-    def cb(ctx: BreakpointContext):
-        print(
-            f"[{ctx.position}] bp={ctx.name} "
-            f"layer={ctx.layer} type={type(ctx.module).__name__}"
-        )
-        if ctx.position == "after" and isinstance(ctx.output, torch.Tensor):
-            print("output shape:", tuple(ctx.output.shape))
-
-    def fwd_after(ctx: BreakpointContext) -> BreakpointOutput:
-        assert "module" in ctx.bp_kwargs, "No processor found in the hook"
-        net = ctx.bp_kwargs["module"]
-        if ctx.position == "after" and isinstance(ctx.output, torch.Tensor):
-            print("output shape:", tuple(ctx.output.shape))
-        new_output = net(ctx.output)
-        cls = BreakpointOutput( fn_name=f"{ctx.name}:{fwd_before.__name__}",
-                                output=new_output,
-                                trace={"identity": new_output}
-                                )
-        return cls
+    @hydra.main(version_base="1.3", config_path="../../configs", config_name="train.yaml")
+    def main(cfg: DictConfig) -> Optional[float]:
+        # print(cfg)
+        plugin_cfg = cfg.plugins
+        print("Initializing model")
+        model = torch.load(plugin_cfg.model_checkpoint, weights_only=False).cuda()
+        model.requires_grad_(False)
+        datamodule = instantiate(cfg.data)
+        # print(type(datamodule)
+        datamodule.setup()
+        loader = datamodule.val_dataloader()
+        data = iter(loader)
+        (x1, x2), y = next(data)
+        controller = BreakpointController.__init_dict__(model, plugin_cfg)
+        controller.cuda()
+        # print(controller.breakpoints)
+        # for key in Breakpoint.list_of_breakpoints.keys():
+        #     for bp in Breakpoint.list_of_breakpoints[key]:
+        #         if isinstance(bp.callback, nn.Module):
+        #             print(f"{bp.name}: To cuda")
+        #             bp.callback.cuda()
+        y = model(x1.cuda(), x2.cuda())
+        for bp in controller.breakpoints:
+            print(bp["breakpoint"].trace)
     
-    def fwd_before(ctx: BreakpointContext) -> BreakpointOutput:
-        assert "module" in ctx.bp_kwargs, "No processor found in the hook"
-        net = ctx.bp_kwargs["module"]
-        if ctx.position == "after" and isinstance(ctx.inputs, torch.Tensor):
-            print("Input shape:", tuple(ctx.inputs.shape))
-        new_input = net(ctx.inputs[0])
-        cls = BreakpointOutput( fn_name=f"{ctx.name}:{fwd_before.__name__}",
-                                output=(new_input),
-                                trace={"identity": (new_input)}
-                                )
-        return cls
-
-    controller = BreakpointController()
-
-    bp1 = Breakpoint(name="by_name", 
-                     callback=fwd_before, 
-                     mutate=False,
-                     kwargs={"module": nn.Identity()})
-    bp2 = Breakpoint(name="by_module", 
-                     callback=fwd_after, 
-                     mutate=True, 
-                     kwargs={"module": nn.Identity()})
-
-    # Hook by layer name
-    controller.add_breakpoint(
-        root=model,
-        target="layer1.0.conv1",
-        bp=bp1,
-        position="before",
-
-    )
-
-    # Hook by actual module instance
-    controller.add_breakpoint(
-        root=model,
-        target=model.layer1[0].bn1,
-        bp=bp2,
-        position="after",
-    )
-
-    x = torch.randn(1, 3, 224, 224)
-    _ = model(x)
-    for bps in Breakpoint.list_of_breakpoints.values():
-        for bp in bps:
-            print(bp.trace)
+    main()

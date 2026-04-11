@@ -48,20 +48,24 @@ class BilinearReconstructor(nn.Module):
         else:
             (latent,), kwargs = ctx.inputs, ctx.kwargs
             mod_1, mod_2 = latent[..., :self.d_1], latent[..., self.d_1:self.d_1 + self.d_2] 
-        (p1, p2) = ctx.bp_kwargs
+        if ctx.bp_kwargs:
+            (p1, p2) = ctx.bp_kwargs
+        else:
+            (p1, p2) = (1, 1)
         rec_2 = self.ln12(mod_1) if p1 else mod_1
         rec_1 = self.ln21(mod_2) if p2 else mod_2
         dist_1 = self.dist(rec_1, mod_2)
         dist_2 = self.dist(rec_2, mod_1)
         output = (rec_1, rec_2)
         if self.concat:
-            output = torch.cat(output, dim=-1)
-            latent[:self.d_1 + self.d_2] = output
-            output = (latent,) 
+            merged = torch.cat(output, dim=-1)
+            tail = latent[..., self.d_1 + self.d_2:]
+            output = (torch.cat([merged, tail], dim=-1),) 
         dev_1 = self.dev1(torch.cat([rec_1, mod_2], dim=-1))
         dev_2 = self.dev2(torch.cat([rec_2, mod_1], dim=-1))
         cls = BreakpointOutput(
                 fn_name=self.forward.__qualname__,
+                context = ctx,
                 output= output,
                 trace={
                        "signal": ctx.bp_kwargs,

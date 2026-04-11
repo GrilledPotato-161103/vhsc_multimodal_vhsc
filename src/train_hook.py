@@ -9,6 +9,8 @@ from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+from src.plugins.hook import BreakpointController, Breakpoint
 # ------------------------------------------------------------------------------------ #
 # the setup_root above is equivalent to:
 # - adding project root dir to PYTHONPATH
@@ -58,7 +60,13 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
+    net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).cuda()
+    net.requires_grad_(False)
+    controller = BreakpointController.__init_dict__(net, cfg.plugins)
+    controller.cuda()
+    print(list(Breakpoint.list_of_breakpoints.keys()))
     model: LightningModule = hydra.utils.instantiate(cfg.model)
+    model = model(net = net, controller = controller)
 
     log.info("Instantiating callbacks...")
     callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))

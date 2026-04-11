@@ -1,4 +1,5 @@
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Callable
+import numpy as np
 
 import torch
 from torch import nn
@@ -7,8 +8,11 @@ from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification.accuracy import Accuracy
 
-from src.plugins.hook import BreakpointController, Breakpoint
+import rootutils
+rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 
+from src.plugins.hook import BreakpointController, Breakpoint
+from src.plugins.head.bayescap import BayesCap1DLoss
 
 class HuberLoss(nn.Module):
     def __init__(self, threshold=0.5):
@@ -25,38 +29,46 @@ class HuberLoss(nn.Module):
 class ModelInjectModule(LightningModule):
     def __init__(self, 
                  net: nn.Module,
-                 controller: BreakpointController,
                  recon_bp: str,
                  unc_bp: str,
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
-                 compile: bool,
-                 recon_criterion: nn.Module | callable = nn.MSELoss(),
-                 unc_criterion: nn.Module | callable = nn.MSELoss(),
+                 controller: BreakpointController | None = None,
+                 compile: bool = False,
+                 recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
+                 unc_criterion: nn.Module | Callable | None = nn.MSELoss(),
+                 epoch_phase: int = 20,
+                 mask_rate: float = 0.3
                  ) -> None:
+        super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller"])
         self.net = net
-        self.net.requires_grad_(False)
         self.controller = controller
         
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
 
+        self.train_recon_loss = MeanMetric()
+        self.val_recon_loss = MeanMetric()
+        self.test_recon_loss = MeanMetric()
+
         self.train_acc = MeanMetric()
         self.val_acc = MeanMetric()
         self.test_acc = MeanMetric()
-        self.val_acc_best = MaxMetric()
+
+        self.val_recon_best = MaxMetric()
 
         self.criterion = torch.nn.MSELoss()
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
         """
             Perform forward on hooked model
         """
-        return self.net(x)
+        (x1, x2) = x
+        return self.net(x1, x2)
 
     def on_train_start(self):
         # Prevent training on training phase
@@ -76,13 +88,25 @@ class ModelInjectModule(LightningModule):
             - A tensor of target labels.
         """
         # Include bp_kwargs in Dataset for breakpoint manipulation
-        x, y, bp_kwargs = batch
+        self.net.eval()
+        self.net.requires_grad_(False)
+        (x1, x2), y = batch
+        x1 = x1.cuda()
+        x2 = x2.cuda()
+        y = y.cuda().unsqueeze(1)
         # Set kwargs for breakpoints
-        logits = self.forward(x)
-        for entry in bp_kwargs.keys(): 
-            Breakpoint.get_by_name(entry).bp_kwargs = bp_kwargs[entry]
+        mask_index = np.random.choice(3, 1, p=(1 - self.hparams.mask_rate, 
+                                              self.hparams.mask_rate / 2,
+                                              self.hparams.mask_rate / 2))[0]
+        bp_signal = [1, 1]
+        if mask_index > 0: 
+            bp_signal[mask_index - 1] = 0
+        recon_bp = Breakpoint.get_by_name(self.hparams.recon_bp)
+        recon_bp.kwargs = tuple(bp_signal)
+        # print(recon_bp.kwargs)
+        logits = self.forward((x1, x2)).unsqueeze(1)
         loss = self.criterion(logits, y)
-        recon_trace = Breakpoint.get_by_name(self.hparams.recon_bp)
+        recon_trace = recon_bp.trace
         sigs = recon_trace.trace["signal"]
         recs = recon_trace.trace["reconstructed"]
         srcs = recon_trace.trace["input"]
@@ -92,9 +116,15 @@ class ModelInjectModule(LightningModule):
         for sig, rec, src, dev, dist in zip(sigs, recs, srcs[::-1], devs, dists): 
             if sig == 0: 
                 continue
-            recon_loss += self.recon_criterion(rec, src) + self.unc_criterion(dev, dist) 
+            recon_loss += self.recon_criterion(rec, src) + self.recon_criterion(dev, dist) 
         
-        return loss, recon_loss, logits, y, recon_trace
+        unc_trace = Breakpoint.get_by_name(self.hparams.unc_bp).trace
+        
+        (mu, inv_alpha, beta) = unc_trace.trace["output"]
+        unc_loss = self.unc_criterion(mu, inv_alpha, beta, logits, y)
+        unc_loss = (unc_loss["loss"] + unc_loss["identity_loss"] + unc_loss["nll_loss"]) / 3
+
+        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"loss": unc_loss}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -106,25 +136,38 @@ class ModelInjectModule(LightningModule):
         :param batch_idx: The index of the current batch.
         :return: A tensor of losses between model predictions and targets.
         """
-        loss, recon_loss, preds, targets, trace = self.model_step(batch)
-        signal = trace.trace["signal"]
+        loss, logits, y, recon, unc = self.model_step(batch)
+        signal = recon["trace"].trace["signal"]
+        signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
         self.train_loss(loss)
-        self.train_acc(recon_loss)
-        self.log(f"train/loss_recon_{"".join(signal)}", 
-                 self.train_acc, 
-                 on_step=False, 
+        self.log(f"train/loss", 
+                 self.train_loss, 
+                 on_step=True, 
                  on_epoch=True, 
                  prog_bar=True)
-        self.log(f"train/loss", 
-                 self.train_loss,
-                 on_step=False,
-                 on_epoch=True,
-                 prog_bar=True)
-        # self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
+
+        self.train_recon_loss(recon["loss"])
+        self.log(f"train/loss_recon_{signal_str}", 
+                    self.train_recon_loss, 
+                    on_step=False, 
+                    on_epoch=True, 
+                    prog_bar=True)
+        
+        
+        self.train_acc(unc["loss"])
+        self.log(f"train/loss_unc_{signal_str}", 
+                self.train_acc, 
+                on_step=True, 
+                on_epoch=True, 
+                prog_bar=True)
+        
+        # Phase 1: Not propagating uncertainty of deficit inputs
+        if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2: 
+            unc["loss"] *= 0
 
         # return loss or backpropagation will fail
-        return recon_loss
+        return loss + recon["loss"] + unc["loss"]
 
     def on_validation_start(self) -> None:
         self.controller.eval()
@@ -138,29 +181,39 @@ class ModelInjectModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, recon_loss, preds, targets, trace = self.model_step(batch)
-        signal = trace.trace["signal"]
+        loss, logits, y, recon, unc = self.model_step(batch)
+        signal = recon["trace"].trace["signal"]
+        signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
         self.val_loss(loss)
-        self.val_acc(recon_loss)
-        self.log(f"val/loss_recon_{"".join(signal)}", 
-                 self.val_acc, 
+        self.log(f"val/loss", 
+                 self.val_loss, 
                  on_step=False, 
                  on_epoch=True, 
                  prog_bar=True)
-        self.log(f"val/loss", 
-                 self.val_loss,
-                 on_step=False,
-                 on_epoch=True,
-                 prog_bar=True)
+
+        self.val_recon_loss(recon["loss"])
+        self.log(f"val/loss_recon_{signal_str}", 
+                    self.val_recon_loss,
+                    on_step=False, 
+                    on_epoch=True, 
+                    prog_bar=True)
+        
+        # if sum(signal) == 2:
+        self.val_acc(unc["loss"])
+        self.log(f"val/loss_unc_{signal_str}", 
+                self.val_acc, 
+                on_step=False, 
+                on_epoch=True, 
+                prog_bar=True)
         
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
-        acc = self.val_acc.compute()  # get current val acc
-        self.val_acc_best(acc)  # update best so far val acc
+        acc = self.val_recon_loss.compute()  # get current val acc
+        self.val_recon_best(acc)  # update best so far val acc
         # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("val/acc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        self.log("val/loss_recon_best", self.val_recon_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Perform a single test step on a batch of data from the test set.
@@ -169,13 +222,30 @@ class ModelInjectModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
-
+        loss, logits, y, recon, unc = self.model_step(batch)
+        signal = recon["trace"].trace["signal"]
+        signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
         self.test_loss(loss)
-        self.test_acc(preds, targets)
-        self.log("test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("test/acc", self.test_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(f"test/loss", 
+                 self.test_loss, 
+                 on_step=False, 
+                 on_epoch=True, 
+                 prog_bar=True)
+
+        self.test_recon_loss(recon["loss"])
+        self.log(f"train/loss_recon_{signal_str}", 
+                    self.test_recon_loss, 
+                    on_step=False, 
+                    on_epoch=True, 
+                    prog_bar=True)
+        
+        self.test_acc(unc["loss"])
+        self.log(f"test/loss_unc_{signal_str}", 
+                self.test_acc, 
+                on_step=False, 
+                on_epoch=True, 
+                prog_bar=True)
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""
@@ -215,5 +285,51 @@ class ModelInjectModule(LightningModule):
                 },
             }
         return {"optimizer": optimizer}
+
+if __name__ == "__main__":
+    import hydra
+    from hydra.utils import instantiate
+    from omegaconf import OmegaConf, DictConfig
+    from functools import partial
+ 
+    @hydra.main(version_base="1.3", config_path="../../configs", config_name="train.yaml")
+    def main(cfg: DictConfig) -> None: 
+        plugin_cfg = cfg.plugins
+        print("Initializing model")
+        model = torch.load(plugin_cfg.model_checkpoint, weights_only=False).cuda()
+        model.requires_grad_(False)
+        datamodule = instantiate(cfg.data)
+        # print(type(datamodule)
+        datamodule.setup()
+        loader = datamodule.val_dataloader()
+        data = iter(loader)
+        batch = next(data)
+        controller = BreakpointController.__init_dict__(model, plugin_cfg)
+        controller.cuda()
+        
+        # module = ModelInjectModule(net=model, 
+        #                            recon_bp="reconstructor.0", 
+        #                            unc_bp="uncertainty.0",
+        #                            optimizer=partial(torch.optim.Adam, lr=0.001, weight_decay=0.0),
+        #                            scheduler=partial(torch.optim.lr_scheduler.ReduceLROnPlateau, mode=min, factor=0.1, patience=5),
+        #                            controller=controller,
+        #                            compile=False,
+        #                            recon_criterion= nn.MSELoss(),
+        #                            unc_criterion=BayesCap1DLoss(
+        #                                                         lambda_identity=1.0,
+        #                                                         lambda_nll=0.05,
+        #                                                         identity_mode="l2",   # "l1" to mimic repo
+        #                                                         nll_mode="paper",     # "repo" to mimic repo
+        #                                                     ),
+        #                             epoch_phase=10)
+        module = instantiate(cfg.model)
+        module = module(net=model, controller=controller)
+        loss, logits, y, recon, unc = module.model_step(batch)
+        print(loss)
+        print(logits)
+        print(y)
+        print(recon)
+        print(unc)
+    main()
 
     
