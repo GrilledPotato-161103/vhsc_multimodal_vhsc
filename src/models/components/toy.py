@@ -109,7 +109,7 @@ class BiModalRegressor(nn.Module):
             residual=use_residual
         )
 
-        fusion_in_dim = latent_dim * 4
+        fusion_in_dim = latent_dim * 2
 
         self.head = MLP(
             in_dim=fusion_in_dim,
@@ -129,10 +129,6 @@ class BiModalRegressor(nn.Module):
 
         z1 = self.x1_encoder(x1)
         z2 = self.x2_encoder(x2)
-
-        z_mul = z1 * z2
-        z_diff = z1 - z2
-
-        z = torch.cat([z1, z2, z_mul, z_diff], dim=-1)
+        z = torch.cat([z1, z2], dim=-1)
         y_hat = self.head(z).squeeze(-1)
         return y_hat

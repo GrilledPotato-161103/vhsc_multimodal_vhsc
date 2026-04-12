@@ -47,6 +47,7 @@ class BiModalEquationDataset(Dataset):
         x1_range: Tuple[float, float] = (-1.0, 1.0),
         x2_range: Tuple[float, float] = (-1.0, 1.0),
         noise_std: float = 0.0,
+        noise_ratio: float = 0.5,
         seed: int = 42,
         dtype: torch.dtype = torch.float32,
     ) -> None:
@@ -55,6 +56,7 @@ class BiModalEquationDataset(Dataset):
         self.expression = expression
         self.x1_range = x1_range
         self.x2_range = x2_range
+        self.noise_ratio = noise_ratio
         self.noise_std = noise_std
         self.dtype = dtype
 
@@ -67,10 +69,13 @@ class BiModalEquationDataset(Dataset):
             x2_range[0], x2_range[1], generator=g
         )
 
+        indexes = torch.bernoulli(torch.full((n_samples,), noise_ratio)).int()
+        augment = lambda x: torch.where(indexes > 0, x + noise_std * torch.randn_like(x, generator=g), x)
         self.y = self._evaluate_expression(self.x1, self.x2)
-
         if noise_std > 0:
-            self.y = self.y + noise_std * torch.randn_like(self.y, generator=g)
+            self.x1 = augment(self.x1)
+            self.x2 = augment(self.x2)
+            # self.y = augment(self.y)
 
         if self.y.ndim == 0:
             self.y = self.y.unsqueeze(0)

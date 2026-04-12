@@ -2,10 +2,10 @@ _target_: src.models.components.toy.BiModalRegressor
 
 x1_dim: 1
 x2_dim: 1
-hidden_dim: 32
-latent_dim: 32
-fusion_hidden_dims: [64, 16, 16]
-activation: gelu
+hidden_dim: 16
+latent_dim: 16
+fusion_hidden_dims: [32, 16, 16]
+activation: silu
 dropout: 0.3
 use_norm: true
 use_residual: true
