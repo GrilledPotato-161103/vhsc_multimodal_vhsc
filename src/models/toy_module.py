@@ -99,10 +99,10 @@ class BiModalLightningModule(LightningModule):
         loss, y_hat, y = self.model_step(batch)
         metrics = self._compute_metrics(y_hat, y)
 
-        self.log("train/loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("train/mae", metrics["mae"], on_step=False, on_epoch=True, sync_dist=True)
-        self.log("train/rmse", metrics["rmse"], on_step=False, on_epoch=True, sync_dist=True)
-        self.log("train/r2", metrics["r2"], on_step=False, on_epoch=True, sync_dist=True)
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train/mae", metrics["mae"], on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/rmse", metrics["rmse"], on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/r2", metrics["r2"], on_step=True, on_epoch=True, sync_dist=True)
         return loss
 
     def validation_step(
