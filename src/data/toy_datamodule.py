@@ -169,6 +169,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
         x1_range: Tuple[float, float] = (-1.0, 1.0),
         x2_range: Tuple[float, float] = (-1.0, 1.0),
         noise_std: float = 0.0,
+        noise_ratio: float = 0.5,
         seed: int = 42,
     ) -> None:
         super().__init__()
@@ -188,6 +189,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
             x1_range=self.hparams.x1_range,
             x2_range=self.hparams.x2_range,
             noise_std=self.hparams.noise_std,
+            noise_ratio=self.hparams.noise_rate,
             seed=self.hparams.seed,
         )
 
