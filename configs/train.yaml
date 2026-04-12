@@ -30,6 +30,7 @@ defaults:
 # task name, determines output directory path
 logger:
   wandb:
+    project: "VISHC_Uncertainty"
     name: toy_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
 task_name: "train"
 
