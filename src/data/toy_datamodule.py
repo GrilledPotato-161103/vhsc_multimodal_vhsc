@@ -189,7 +189,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
             x1_range=self.hparams.x1_range,
             x2_range=self.hparams.x2_range,
             noise_std=self.hparams.noise_std,
-            noise_ratio=self.hparams.noise_rate,
+            noise_ratio=self.hparams.noise_ratio,
             seed=self.hparams.seed,
         )
 
