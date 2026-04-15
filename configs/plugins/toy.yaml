@@ -8,12 +8,12 @@ breakpoints:
       name: reconstructor
       callback: 
         _target_: src.plugins.reconstructor.linear.BilinearReconstructor
-        d_1: 64
-        d_2: 64
+        d_1: ${model.net.latent_dim}
+        d_2: ${model.net.latent_dim}
         hidden_dim: 32
-        activation: relu
+        activation: silu
         norm: layernorm
-        dropout: 0.3
+        dropout: 0.5
         order: adn
         concat: true
         dist: 
@@ -30,8 +30,10 @@ breakpoints:
       callback:
         _target_: src.plugins.head.bayescap.BayesCap1D
         input_dim: 1
-        hidden_dims: [16, 16]
+        hidden_dims: [8, 8, 4]
         per_dim_uncertainty: False
+        dropout: 0.3
+        activation: silu
       mutate: false
       valid: true
     pos: after
