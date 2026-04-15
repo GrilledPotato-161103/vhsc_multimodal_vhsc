@@ -184,7 +184,7 @@ class ModelInjectModule(LightningModule):
 
     def on_validation_start(self) -> None:
         self.controller.eval()
-        print("Breakpoints are set to evaluation !!!")
+        # print("Breakpoints are set to evaluation !!!")
         super().on_validation_start()
     
     def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
