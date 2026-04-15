@@ -160,7 +160,7 @@ class ModelInjectModule(LightningModule):
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.train_recon_loss(recon["loss"])
+        self.train_recon_loss(recon["loss"].mean())
         self.log(f"train/loss_recon_{signal_str}", 
                     self.train_recon_loss, 
                     on_step=False, 
@@ -196,7 +196,7 @@ class ModelInjectModule(LightningModule):
         """
         
         # Cached files
-        loss, logits, y, recon, unc = self.model_step(batch)
+        loss, logits, y, recon, unc = self.model_step(batch,    kwargs={"bp_signal": (1, 1)})
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         self.val_loss(loss)
@@ -229,6 +229,10 @@ class ModelInjectModule(LightningModule):
         # otherwise metric would be reset by lightning after each epoch
         self.log("val/loss_unc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
 
+    def on_test_epoch_start(self):
+        print("Testing and Ablation study on epoch", self.current_epoch)
+        return super().on_test_epoch_start()
+    
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Perform a single test step on a batch of data from the test set.
 
