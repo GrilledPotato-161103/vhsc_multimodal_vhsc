@@ -13,7 +13,6 @@ optimizer:
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
   _partial_: true
-  monitor: val/loss_unc_11
   mode: min
   factor: 0.1
   patience: 10
