@@ -7,7 +7,7 @@ defaults:
   - data: toy
   - model: hook
   - plugins: toy
-  - callbacks: default
+  - callbacks: hook
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: default
   - paths: default
@@ -33,6 +33,11 @@ logger:
   wandb:
     name: hook_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
 task_name: "train"
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/loss"
+    mode: "min"
 
 # tags to help you identify your experiments
 # you can overwrite this in experiment configs

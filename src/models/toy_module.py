@@ -158,6 +158,10 @@ class BiModalLightningModule(LightningModule):
         if y_hat.ndim == 2 and y_hat.shape[-1] == 1:
             y_hat = y_hat.squeeze(-1)
         return y_hat
+    
+    def on_save_checkpoint(self, checkpoint):
+        super().on_save_checkpoint(checkpoint)
+        torch.save(self.net, "data/checkpoints/toy.pth")
 
     def configure_optimizers(self) -> Dict[str, Any] | torch.optim.Optimizer:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())

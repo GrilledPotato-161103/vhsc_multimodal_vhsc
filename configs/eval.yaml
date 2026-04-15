@@ -15,7 +15,7 @@ task_name: "eval"
 tags: ["dev"]
 
 # passing checkpoint path is necessary for evaluation
-ckpt_path: data/checkpoint.ckpt
+ckpt_path: data/checkpoint_1.ckpt
 
 logger:
   wandb:
