@@ -65,7 +65,7 @@ class ModelInjectModule(LightningModule):
 
         self.val_acc_best = MinMetric()
 
-        self.criterion = torch.nn.MSELoss(reduction="none")
+        self.criterion = torch.nn.MSELoss()
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
         
@@ -153,7 +153,7 @@ class ModelInjectModule(LightningModule):
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
-        self.train_loss(loss)
+        self.train_loss(loss.mean())
         self.log(f"train/loss", 
                  self.train_loss, 
                  on_step=True, 
@@ -168,7 +168,7 @@ class ModelInjectModule(LightningModule):
                     prog_bar=True)
         
         
-        self.train_acc(unc["loss"])
+        self.train_acc(unc["loss"].mean())
         self.log(f"train/loss_unc_{signal_str}", 
                 self.train_acc, 
                 on_step=True, 
@@ -180,7 +180,7 @@ class ModelInjectModule(LightningModule):
             unc["loss"] *= 0
 
         # return loss or backpropagation will fail
-        return loss + recon["loss"] + unc["loss"]
+        return loss + recon["loss"].mean() + unc["loss"].mean()
 
     def on_validation_start(self) -> None:
         self.controller.eval()
@@ -206,14 +206,14 @@ class ModelInjectModule(LightningModule):
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.val_recon_loss(recon["loss"])
+        self.val_recon_loss(recon["loss"].mean())
         self.log(f"val/loss_recon_{signal_str}", 
                     self.val_recon_loss, 
                     on_step=False, 
                     on_epoch=True, 
                     prog_bar=True)
         
-        self.val_acc(unc["loss"])
+        self.val_acc(unc["loss"].mean())
         self.log(f"val/loss_unc_{signal_str}", 
                 self.val_acc, 
                 on_step=False, 
@@ -247,14 +247,14 @@ class ModelInjectModule(LightningModule):
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.test_recon_loss(recon["loss"])
+        self.test_recon_loss(recon["loss"].mean())
         self.log(f"train/loss_recon_{signal_str}", 
                     self.test_recon_loss, 
                     on_step=False, 
                     on_epoch=True, 
                     prog_bar=True)
         
-        self.test_acc(unc["loss"])
+        self.test_acc(unc["loss"].mean())
         self.log(f"test/loss_unc_{signal_str}", 
                 self.test_acc, 
                 on_step=False, 
