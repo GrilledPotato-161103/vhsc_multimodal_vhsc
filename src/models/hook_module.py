@@ -127,7 +127,7 @@ class ModelInjectModule(LightningModule):
         for sig, rec, src, dev, dist in zip(sigs, recs, srcs[::-1], devs, dists): 
             if sig == 0: 
                 continue
-            recon_loss += self.recon_criterion(rec, src) + self.recon_criterion(dev, dist) 
+            recon_loss += self.recon_criterion(rec, src) 
         
         unc_trace = Breakpoint.get_by_name(self.hparams.unc_bp).trace
         
