@@ -163,7 +163,7 @@ class ModelInjectModule(LightningModule):
         self.train_recon_loss(recon["loss"].mean())
         self.log(f"train/loss_recon_{signal_str}", 
                     self.train_recon_loss, 
-                    on_step=False, 
+                    on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
@@ -202,21 +202,21 @@ class ModelInjectModule(LightningModule):
         self.val_loss(loss)
         self.log(f"test/loss", 
                  self.val_loss, 
-                 on_step=False, 
+                 on_step=True, 
                  on_epoch=True, 
                  prog_bar=True)
 
         self.val_recon_loss(recon["loss"].mean())
         self.log(f"val/loss_recon_{signal_str}", 
                     self.val_recon_loss, 
-                    on_step=False, 
+                    on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
         self.val_acc(unc["loss"].mean())
         self.log(f"val/loss_unc_{signal_str}", 
                 self.val_acc, 
-                on_step=False, 
+                on_step=True, 
                 on_epoch=True, 
                 prog_bar=True)
         
