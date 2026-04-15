@@ -196,7 +196,7 @@ class ModelInjectModule(LightningModule):
         """
         
         # Cached files
-        loss, logits, y, recon, unc = self.model_step(batch,    kwargs={"bp_signal": (1, 1)})
+        loss, logits, _, recon, unc = self.model_step(batch,    kwargs={"bp_signal": (1, 1)})
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         self.val_loss(loss)
@@ -239,7 +239,7 @@ class ModelInjectModule(LightningModule):
                 if x2.grad is not None: x2.grad.zero_()
                 
                 # Forward pass để tính loss
-                loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
+                loss, logits, _, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
                 
                 signal = recon["trace"].trace["signal"]
                 kwargs["bp_signal"] = signal
