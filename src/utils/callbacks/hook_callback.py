@@ -42,11 +42,11 @@ class AdversarialVizCallback(pl.Callback):
         self.losses = []
         self.variances = []
     
-    def on_test_epoch_start(self, trainer, pl_module):
+    def on_validation_epoch_start(self, trainer, pl_module):
         print("Callback visited")
         return super().on_test_epoch_start(trainer, pl_module)
 
-    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if batch_idx != 0 or outputs is None or "postion" not in outputs:
             return
         # Lấy jump distance để tính loga của loss gain
@@ -88,7 +88,7 @@ class AdversarialVizCallback(pl.Callback):
         self.variances.append(variance)
         return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
-    def on_test_epoch_end(self, trainer, pl_module):
+    def on_validation_epoch_end(self, trainer, pl_module):
         # B*, N, 2
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
         directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)

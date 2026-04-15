@@ -220,51 +220,6 @@ class ModelInjectModule(LightningModule):
                 on_epoch=True, 
                 prog_bar=True)
         
-        
-    def on_validation_epoch_end(self) -> None:
-        "Lightning hook that is called when a validation epoch ends."
-        acc = self.val_acc.compute()  # get current val acc
-        self.val_acc_best(acc)  # update best so far val acc
-        # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
-        # otherwise metric would be reset by lightning after each epoch
-        self.log("val/loss_unc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
-
-    def on_test_epoch_start(self):
-        print("Testing and Ablation study on epoch", self.current_epoch)
-        return super().on_test_epoch_start()
-    
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
-        """Perform a single test step on a batch of data from the test set.
-
-        :param batch: A batch of data (a tuple) containing the input tensor of images and target
-            labels.
-        :param batch_idx: The index of the current batch.
-        """
-        loss, logits, y, recon, unc = self.model_step(batch)
-        signal = recon["trace"].trace["signal"]
-        signal_str = f"{signal[0]}{signal[1]}"
-        # update and log metrics
-        self.test_loss(loss)
-        self.log(f"test/loss", 
-                 self.test_loss, 
-                 on_step=False, 
-                 on_epoch=True, 
-                 prog_bar=True)
-
-        self.test_recon_loss(recon["loss"].mean())
-        self.log(f"train/loss_recon_{signal_str}", 
-                    self.test_recon_loss, 
-                    on_step=False, 
-                    on_epoch=True, 
-                    prog_bar=True)
-        
-        self.test_acc(unc["loss"].mean())
-        self.log(f"test/loss_unc_{signal_str}", 
-                self.test_acc, 
-                on_step=False, 
-                on_epoch=True, 
-                prog_bar=True)
-        
         (x1_orig, x2_orig), y = batch
         
         kwargs = dict()
@@ -326,6 +281,52 @@ class ModelInjectModule(LightningModule):
         result["bp_signal"] = kwargs["bp_signal"]
         # Trả result để callback nhận và digest        
         return result
+        
+        
+    def on_validation_epoch_end(self) -> None:
+        "Lightning hook that is called when a validation epoch ends."
+        acc = self.val_acc.compute()  # get current val acc
+        self.val_acc_best(acc)  # update best so far val acc
+        # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
+        # otherwise metric would be reset by lightning after each epoch
+        self.log("val/loss_unc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+
+    def on_test_epoch_start(self):
+        print("Testing and Ablation study on epoch", self.current_epoch)
+        return super().on_test_epoch_start()
+    
+    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+        """Perform a single test step on a batch of data from the test set.
+
+        :param batch: A batch of data (a tuple) containing the input tensor of images and target
+            labels.
+        :param batch_idx: The index of the current batch.
+        """
+        loss, logits, y, recon, unc = self.model_step(batch)
+        signal = recon["trace"].trace["signal"]
+        signal_str = f"{signal[0]}{signal[1]}"
+        # update and log metrics
+        self.test_loss(loss)
+        self.log(f"test/loss", 
+                 self.test_loss, 
+                 on_step=False, 
+                 on_epoch=True, 
+                 prog_bar=True)
+
+        self.test_recon_loss(recon["loss"].mean())
+        self.log(f"train/loss_recon_{signal_str}", 
+                    self.test_recon_loss, 
+                    on_step=False, 
+                    on_epoch=True, 
+                    prog_bar=True)
+        
+        self.test_acc(unc["loss"].mean())
+        self.log(f"test/loss_unc_{signal_str}", 
+                self.test_acc, 
+                on_step=False, 
+                on_epoch=True, 
+                prog_bar=True)
+        
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""
