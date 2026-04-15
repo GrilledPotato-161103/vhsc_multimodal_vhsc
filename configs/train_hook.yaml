@@ -28,9 +28,9 @@ defaults:
   - debug: null
 
 data:
-  n_samples: 50000
-  batch_size: 32
-  num_workers: 2
+  n_samples: 200000
+  batch_size: 256
+  num_workers: 12
 
 # task name, determines output directory path
 logger:
