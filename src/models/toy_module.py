@@ -5,14 +5,11 @@ from typing import Any, Dict, Tuple, Literal
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torchmetrics import MaxMetric, MeanMetric, MinMetric
+
 
 from lightning import LightningModule
 from hydra.utils import instantiate
-
-
-import functools
-torch.serialization.add_safe_globals([functools.partial])
-
 class BiModalLightningModule(LightningModule):
     """
     Hydra-compatible LightningModule for bimodal regression.
@@ -40,6 +37,9 @@ class BiModalLightningModule(LightningModule):
         self.compile_model = compile_model
         self.loss_name = loss_name
         self.huber_delta = huber_delta
+
+        self.val_rmse_best = MinMetric()
+        self.val_rmse = MeanMetric()
 
         self.save_hyperparameters(logger=False, ignore=["net"])
 
@@ -115,11 +115,20 @@ class BiModalLightningModule(LightningModule):
     ) -> None:
         loss, y_hat, y = self.model_step(batch)
         metrics = self._compute_metrics(y_hat, y)
+        self.val_rmse(metrics["rmse"])
 
         self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("val/mae", metrics["mae"], on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log("val/rmse", metrics["rmse"], on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("val/rmse", self.val_rmse, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log("val/r2", metrics["r2"], on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+    
+    def on_validation_epoch_end(self) -> None:
+        "Lightning hook that is called when a validation epoch ends."
+        score = self.val_rmse.compute()  # get current val acc
+        self.val_rmse_best(score)  # update best so far val acc
+        # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
+        # otherwise metric would be reset by lightning after each epoch
+        self.log("val/loss_rmse_best", self.val_rmse_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(
         self,
@@ -149,10 +158,6 @@ class BiModalLightningModule(LightningModule):
         if y_hat.ndim == 2 and y_hat.shape[-1] == 1:
             y_hat = y_hat.squeeze(-1)
         return y_hat
-    
-    def on_save_checkpoint(self, checkpoint):
-        super().on_save_checkpoint(checkpoint)
-        torch.save(self.net, "data/checkpoints/toy.pth")
 
     def configure_optimizers(self) -> Dict[str, Any] | torch.optim.Optimizer:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())

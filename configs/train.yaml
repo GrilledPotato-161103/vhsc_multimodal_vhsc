@@ -34,6 +34,13 @@ logger:
     name: toy_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
 task_name: "train"
 
+callbacks:
+  model_checkpoint:
+    monitor: "val/rmse_best"
+    mode: "min"
+    save_last: True
+    auto_insert_metric_name: False
+
 # tags to help you identify your experiments
 # you can overwrite this in experiment configs
 # overwrite from command line with `python train.py tags="[first_tag, second_tag]"`

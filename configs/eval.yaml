@@ -15,4 +15,9 @@ task_name: "eval"
 tags: ["dev"]
 
 # passing checkpoint path is necessary for evaluation
-ckpt_path: a
+ckpt_path: data/checkpoint.ckpt
+
+logger:
+  wandb:
+    project: "VISHC_Uncertainty"
+    name: toy_model_eval_${now:%Y-%m-%d}_${now:%H-%M-%S}
