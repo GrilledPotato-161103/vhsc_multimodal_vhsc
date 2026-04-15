@@ -51,6 +51,7 @@ class BiModalEquationDataset(Dataset):
         generator: torch.Generator | None = None,
         seed: int = 42,
         dtype: torch.dtype = torch.float32,
+        sampling: str = "uniform"
     ) -> None:
         super().__init__()
         self.n_samples = n_samples
@@ -64,10 +65,13 @@ class BiModalEquationDataset(Dataset):
         g = torch.Generator().manual_seed(seed) if not generator else generator
         # Sử dụng Normal distribution để thể hiện rõ hơn về mean và variance thực tế
         l1, r1 = x1_range
-        self.x1 = torch.randn([n_samples], generator=g) * (r1 - l1) + l1
-
         l2, r2 = x2_range
-        self.x2 = torch.randn([n_samples], generator=g) * (r2 - l2) + l2
+        if sampling == "normal":
+            self.x1 = torch.randn([n_samples], generator=g) * (r1 - l1) + l1
+            self.x2 = torch.randn([n_samples], generator=g) * (r2 - l2) + l2
+        else:
+            self.x1 = torch.empty((n_samples,)).uniform_(l1, r1, generator=g)
+            self.x2 = torch.empty((n_samples,)).uniform_(l2, r2, generator=g)
 
         indexes = torch.bernoulli(torch.full((n_samples,), noise_ratio)).int()
 
@@ -217,6 +221,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     noise_ratio=self.hparams.noise_ratio,
                                                     generator=generator,
                                                     seed=self.hparams.seed,
+                                                    sampling="uniform"
                                                     )
         self.val_dataset = BiModalEquationDataset(
                                                     n_samples=n_train,
