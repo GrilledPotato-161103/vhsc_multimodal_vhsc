@@ -33,6 +33,7 @@ class AdversarialVizCallback(pl.Callback):
         super().__init__()
         self.grid_size = grid_size # Độ phân giải của lưới (mesh)
         self.reset_states()
+        print("Visualizer Created")
 
     def reset_states(self):
         self.positions = []
@@ -40,6 +41,10 @@ class AdversarialVizCallback(pl.Callback):
         self.intensities = []
         self.losses = []
         self.variances = []
+    
+    def on_test_epoch_start(self, trainer, pl_module):
+        print("Callback visited")
+        return super().on_test_epoch_start(trainer, pl_module)
 
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if batch_idx != 0 or outputs is None or "postion" not in outputs:
@@ -81,6 +86,7 @@ class AdversarialVizCallback(pl.Callback):
         self.intensities.append(torch.stack(outputs["intensity"], dim=1))
         self.losses.append(losses)
         self.variances.append(variance)
+        return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
     def on_test_epoch_end(self, trainer, pl_module):
         # B*, N, 2
@@ -177,6 +183,7 @@ class AdversarialVizCallback(pl.Callback):
                 fig.write_html(f"{name.replace('/', '_')}_epoch_{trainer.current_epoch}.html")
         # Trả về state ban đầu
         self.reset_states()
+        return super().on_test_epoch_end(trainer, pl_module)
 
 
 
