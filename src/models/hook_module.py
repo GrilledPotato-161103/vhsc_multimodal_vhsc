@@ -251,8 +251,8 @@ class ModelInjectModule(LightningModule):
                 x2_jump = x2.grad.sign() / grad_norm
                 # Cập nhật vào bảng kết quả để đưa ra callback visualize
                 result["losses"].append(loss.clone().detach())
-                result["postion"].append([x1.clone().detach().item(), x2.clone().detach().item()])
-                result["direction"].append([x1_jump.clone().detach().item(), x2_jump.clone().detach().item()])
+                result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
+                result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
                 result["intensity"].append(grad_norm)
                 result["uncertainty"].append(unc)
                 # 3. Cập nhật dữ liệu x1, x2 để TĂNG loss
@@ -275,8 +275,8 @@ class ModelInjectModule(LightningModule):
             loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
             result["losses"].append(loss.clone().detach())
             # N (B, 2)
-            result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach().item()], axis=-1))
-            result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach().item()], axis=-1))
+            result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
+            result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
             result["uncertainty"].append(unc)
         result["bp_signal"] = kwargs["bp_signal"]
         # Trả result để callback nhận và digest        
