@@ -1,8 +1,8 @@
 from pytorch_lightning.callbacks import Callback
 
 class RunTestEveryNEpochs(Callback):
-    def __init__(self, every_n_epoch: int):
-        self.n = every_n_epoch
+    def __init__(self, every_n_epochs: int):
+        self.n = every_n_epochs
         print("Test Runner created")
 
     def on_validation_epoch_end(self, trainer, pl_module):
