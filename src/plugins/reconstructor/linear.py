@@ -52,8 +52,8 @@ class BilinearReconstructor(nn.Module):
             (p1, p2) = ctx.bp_kwargs
         else:
             (p1, p2) = (1, 1)
-        rec_2 = self.ln12(mod_1) if p1 else mod_1
-        rec_1 = self.ln21(mod_2) if p2 else mod_2
+        rec_2 = self.ln12(mod_1) if p1 else mod_2
+        rec_1 = self.ln21(mod_2) if p2 else mod_1
         dist_1 = self.dist(rec_1, mod_2)
         dist_2 = self.dist(rec_2, mod_1)
         output = (rec_1, rec_2)
