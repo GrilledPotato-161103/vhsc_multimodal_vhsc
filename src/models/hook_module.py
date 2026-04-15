@@ -1,4 +1,5 @@
 from typing import Any, Dict, Tuple, Callable
+from collections import defaultdict
 import numpy as np
 
 import torch
@@ -13,6 +14,9 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss
+
+import functools
+torch.serialization.add_safe_globals([functools.partial])
 
 class HuberLoss(nn.Module):
     def __init__(self, threshold=0.5):
@@ -38,7 +42,9 @@ class ModelInjectModule(LightningModule):
                  recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
                  unc_criterion: nn.Module | Callable | None = nn.MSELoss(),
                  epoch_phase: int = 20,
-                 mask_rate: float = 0.3
+                 mask_rate: float = 0.3,
+                 eta: float = 0.1,
+                 n_jumps: int = 8
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller"])
@@ -76,7 +82,7 @@ class ModelInjectModule(LightningModule):
         return super().on_train_start()
     
     def model_step(
-        self, batch
+        self, batch, **kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform a single model step on a batch of data.
 
@@ -94,13 +100,18 @@ class ModelInjectModule(LightningModule):
         x1 = x1.cuda()
         x2 = x2.cuda()
         y = y.cuda().unsqueeze(1)
-        # Set kwargs for breakpoints
-        mask_index = np.random.choice(3, 1, p=(1 - self.hparams.mask_rate, 
-                                              self.hparams.mask_rate / 2,
-                                              self.hparams.mask_rate / 2))[0]
-        bp_signal = [1, 1]
-        if mask_index > 0: 
-            bp_signal[mask_index - 1] = 0
+
+        # Set kwargs for breakpoints, use cache if available
+        if "bp_signal" in kwargs.keys():
+            bp_signal = kwargs["bp_signal"]
+        else:
+            mask_index = np.random.choice(3, 1, p=(1 - self.hparams.mask_rate, 
+                                                self.hparams.mask_rate / 2,
+                                                self.hparams.mask_rate / 2))[0]
+            bp_signal = [1, 1]
+            if mask_index > 0: 
+                bp_signal[mask_index - 1] = 0
+        
         recon_bp = Breakpoint.get_by_name(self.hparams.recon_bp)
         recon_bp.kwargs = tuple(bp_signal)
         # print(recon_bp.kwargs)
@@ -124,7 +135,7 @@ class ModelInjectModule(LightningModule):
         unc_loss = self.unc_criterion(mu, inv_alpha, beta, logits, y)
         unc_loss = (unc_loss["loss"] + unc_loss["identity_loss"] + unc_loss["nll_loss"]) / 3
 
-        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"loss": unc_loss}
+        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, "alpha": inv_alpha, "beta": beta, "loss": unc_loss}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -181,31 +192,72 @@ class ModelInjectModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, logits, y, recon, unc = self.model_step(batch)
+        (x1_orig, x2_orig), y = batch
+        kwargs = dict()
+        # 1. BẮT BUỘC: Ép mở lại tính toán gradient trong Validation
+        result = defaultdict(list)
+        with torch.enable_grad():
+            
+            # Tạo bản sao của x1, x2 để không làm hỏng dữ liệu gốc
+            # và bật requires_grad=True để theo dõi gradient
+            x1 = x1_orig.clone().detach().requires_grad_(True)
+            x2 = x2_orig.clone().detach().requires_grad_(True)
+            # Sử dụng loss như 1 thang đo cho OOD
+            # 2. Vòng lặp tấn công PGD (Gradient Ascent)
+            for _ in range(self.hparams.n_jumps):
+                # Xóa gradient cũ (nếu có) trước mỗi bước tính toán
+                if x1.grad is not None: x1.grad.zero_()
+                if x2.grad is not None: x2.grad.zero_()
+                
+                # Forward pass để tính loss
+                loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs)
+                
+                signal = recon["trace"].trace["signal"]
+                kwargs["bp_signal"] = signal
+                # Lan truyền ngược để trích xuất gradient
+                loss.backward()
+                # Normalize gradient để trích xuất pha only
+                grad_norm = torch.sqrt(x1.grad ** 2 + x2.grad ** 2)
+                x1_jump = x1.grad.sign() / grad_norm
+                x2_jump = x2.grad.sign() / grad_norm
+                # Cập nhật vào bảng kết quả để đưa ra callback visualize
+                result["losses"].append(loss.clone().detach())
+                result["postion"].append([x1.clone().detach().item(), x2.clone().detach().item()])
+                result["direction"].append([x1_jump.clone().detach().item(), x2_jump.clone().detach().item()])
+                result["intensity"].append(grad_norm)
+                result["uncertainty"].append(unc)
+                # 3. Cập nhật dữ liệu x1, x2 để TĂNG loss
+                # Thao tác này phải nằm trong no_grad để không bị theo dõi vào đồ thị
+                with torch.no_grad():
+                    # Đẩy lên dốc (Gradient Ascent)
+                    x1_new = x1 + self.hparams.eta * x1_jump # [cite: 92]
+                    x2_new = x2 + self.hparams.eta * x2_jump
+                    # (Tùy chọn) Thêm bước Projection (cắt tỉa) nếu bạn muốn giới hạn nhiễu epsilon
+                    # x1_new = torch.clamp(x1_new, x1_orig - epsilon, x1_orig + epsilon)
+                    # x2_new = torch.clamp(x2_new, x2_orig - epsilon, x2_orig + epsilon)
+                
+                # Gán lại giá trị và bật requires_grad cho bước lặp tiếp theo
+                x1 = x1_new.requires_grad_(True)
+                x2 = x2_new.requires_grad_(True)
+
+        # 4. Đánh giá lại mô hình trên dữ liệu đã bị tấn công (Adversarial Data)
+        # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường
+        with torch.no_grad():
+            loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
+            result["losses"].append(loss.clone().detach())
+            # N (B, 2)
+            result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach().item()], axis=-1))
+            result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach().item()], axis=-1))
+            result["uncertainty"].append(unc)
+        result["bp_signal"] = kwargs["bp_signal"]
+
+        # Cached files
+        # loss, logits, y, recon, unc = self.model_step(batch)
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
-        # update and log metrics
-        self.val_loss(loss)
-        self.log(f"val/loss", 
-                 self.val_loss, 
-                 on_step=False, 
-                 on_epoch=True, 
-                 prog_bar=True)
 
-        self.val_recon_loss(recon["loss"])
-        self.log(f"val/loss_recon_{signal_str}", 
-                    self.val_recon_loss,
-                    on_step=False, 
-                    on_epoch=True, 
-                    prog_bar=True)
-        
-        # if sum(signal) == 2:
-        self.val_acc(unc["loss"])
-        self.log(f"val/loss_unc_{signal_str}", 
-                self.val_acc, 
-                on_step=False, 
-                on_epoch=True, 
-                prog_bar=True)
+        # Trả result để callback nhận và digest        
+        return result
         
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."

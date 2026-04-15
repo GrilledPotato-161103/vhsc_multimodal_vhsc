@@ -10,6 +10,9 @@ from lightning import LightningModule
 from hydra.utils import instantiate
 
 
+import functools
+torch.serialization.add_safe_globals([functools.partial])
+
 class BiModalLightningModule(LightningModule):
     """
     Hydra-compatible LightningModule for bimodal regression.

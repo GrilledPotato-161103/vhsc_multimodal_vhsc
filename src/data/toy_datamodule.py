@@ -48,6 +48,7 @@ class BiModalEquationDataset(Dataset):
         x2_range: Tuple[float, float] = (-1.0, 1.0),
         noise_std: float = 0.0,
         noise_ratio: float = 0.5,
+        generator: torch.Generator | None = None,
         seed: int = 42,
         dtype: torch.dtype = torch.float32,
     ) -> None:
@@ -60,22 +61,21 @@ class BiModalEquationDataset(Dataset):
         self.noise_std = noise_std
         self.dtype = dtype
 
-        g = torch.Generator().manual_seed(seed)
+        g = torch.Generator().manual_seed(seed) if not generator else generator
+        # Sử dụng Normal distribution để thể hiện rõ hơn về mean và variance thực tế
+        l1, r1 = x1_range
+        self.x1 = torch.randn([n_samples], generator=g) * (r1 - l1) + l1
 
-        self.x1 = torch.empty(n_samples, dtype=dtype).uniform_(
-            x1_range[0], x1_range[1], generator=g
-        )
-        self.x2 = torch.empty(n_samples, dtype=dtype).uniform_(
-            x2_range[0], x2_range[1], generator=g
-        )
+        l2, r2 = x2_range
+        self.x2 = torch.randn([n_samples], generator=g) * (r2 - l2) + l2
 
         indexes = torch.bernoulli(torch.full((n_samples,), noise_ratio)).int()
-        augment = lambda x: torch.where(indexes > 0, x + noise_std * torch.randn_like(x, generator=g), x)
+
+        # Uniform để tối đa hóa entropy
+        augment = lambda x: torch.where(indexes > 0, x + noise_std * torch.empty_like(x).uniform_(-1, 1, generator=g), x)
         self.y = self._evaluate_expression(self.x1, self.x2)
         if noise_std > 0:
-            self.x1 = augment(self.x1)
-            self.x2 = augment(self.x2)
-            # self.y = augment(self.y)
+            self.y = augment(self.y)
 
         if self.y.ndim == 0:
             self.y = self.y.unsqueeze(0)
@@ -182,18 +182,18 @@ class ToyBiModalDataModule(L.LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         if self.train_dataset is not None:
             return
+        # n_train = * 
+        # self.train_dataset = BiModalEquationDataset(
+        #     n_samples=self.hparams.n_samples,
+        #     expression=self.hparams.expression,
+        #     x1_range=self.hparams.x1_range,
+        #     x2_range=self.hparams.x2_range,
+        #     noise_std=self.hparams.noise_std,
+        #     noise_ratio=self.hparams.noise_ratio,
+        #     seed=self.hparams.seed,
+        # )
 
-        full_dataset = BiModalEquationDataset(
-            n_samples=self.hparams.n_samples,
-            expression=self.hparams.expression,
-            x1_range=self.hparams.x1_range,
-            x2_range=self.hparams.x2_range,
-            noise_std=self.hparams.noise_std,
-            noise_ratio=self.hparams.noise_ratio,
-            seed=self.hparams.seed,
-        )
-
-        n_total = len(full_dataset)
+        n_total = self.hparams.n_samples
         n_val = int(n_total * self.hparams.val_ratio)
         n_test = int(n_total * self.hparams.test_ratio)
         n_train = n_total - n_val - n_test
@@ -203,15 +203,40 @@ class ToyBiModalDataModule(L.LightningDataModule):
                 "Invalid split sizes. Ensure n_samples is large enough and "
                 "val_ratio + test_ratio < 1."
             )
+        generator = torch.Generator().manual_seed(self.hparams.seed)
 
-        split_generator = torch.Generator().manual_seed(self.hparams.seed)
+        self.train_dataset = BiModalEquationDataset(
+                                                    n_samples=n_train,
+                                                    expression=self.hparams.expression,
+                                                    x1_range=self.hparams.x1_range,
+                                                    x2_range=self.hparams.x2_range,
+                                                    noise_std=self.hparams.noise_std,
+                                                    noise_ratio=self.hparams.noise_ratio,
+                                                    generator=generator,
+                                                    seed=self.hparams.seed,
+                                                    )
+        self.val_dataset = BiModalEquationDataset(
+                                                    n_samples=n_train,
+                                                    expression=self.hparams.expression,
+                                                    x1_range=self.hparams.x1_range,
+                                                    x2_range=self.hparams.x2_range,
+                                                    noise_std=0,
+                                                    noise_ratio=0,
+                                                    generator=generator,
+                                                    seed=self.hparams.seed,
+                                                    )
 
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(
-            full_dataset,
-            [n_train, n_val, n_test],
-            generator=split_generator,
-        )
-
+        self.test_dataset = BiModalEquationDataset(
+                                                    n_samples=n_train,
+                                                    expression=self.hparams.expression,
+                                                    x1_range=self.hparams.x1_range,
+                                                    x2_range=self.hparams.x2_range,
+                                                    noise_std=0,
+                                                    noise_ratio=0,
+                                                    generator=generator,
+                                                    seed=self.hparams.seed,
+                                                    )
+        
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             self.train_dataset,
