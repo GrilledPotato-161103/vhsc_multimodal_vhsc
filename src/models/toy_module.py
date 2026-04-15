@@ -128,7 +128,7 @@ class BiModalLightningModule(LightningModule):
         self.val_rmse_best(score)  # update best so far val acc
         # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("val/loss_rmse_best", self.val_rmse_best.compute(), sync_dist=True, prog_bar=True)
+        self.log("val/rmse_best", self.val_rmse_best.compute(), sync_dist=True, prog_bar=True)
 
     def test_step(
         self,
