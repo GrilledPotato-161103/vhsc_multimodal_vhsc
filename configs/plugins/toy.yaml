@@ -8,8 +8,8 @@ breakpoints:
       name: reconstructor
       callback: 
         _target_: src.plugins.reconstructor.linear.BilinearReconstructor
-        d_1: ${model.net.latent_dim}
-        d_2: ${model.net.latent_dim}
+        d_1: 16
+        d_2: 16
         hidden_dim: 32
         activation: silu
         norm: layernorm
