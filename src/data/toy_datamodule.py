@@ -75,7 +75,10 @@ class BiModalEquationDataset(Dataset):
         augment = lambda x: torch.where(indexes > 0, x + noise_std * torch.empty_like(x).uniform_(-1, 1, generator=g), x)
         self.y = self._evaluate_expression(self.x1, self.x2)
         if noise_std > 0:
-            self.y = augment(self.y)
+            # Augmenting y seems to break the cycle
+            self.x1 = augment(self.x1)
+            self.x2 = augment(self.x2)
+            # self.y = augment(self.y)
 
         if self.y.ndim == 0:
             self.y = self.y.unsqueeze(0)

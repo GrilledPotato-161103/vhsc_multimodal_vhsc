@@ -13,7 +13,7 @@ import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 
 from src.plugins.hook import BreakpointController, Breakpoint
-from src.plugins.head.bayescap import BayesCap1DLoss
+from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
@@ -131,11 +131,12 @@ class ModelInjectModule(LightningModule):
         
         unc_trace = Breakpoint.get_by_name(self.hparams.unc_bp).trace
         
-        (mu, inv_alpha, beta) = unc_trace.trace["output"]
-        unc_loss = self.unc_criterion(mu, inv_alpha, beta, logits, y)
+        (mu, alpha, beta) = unc_trace.trace["output"]
+        variance = bayescap_variance_1d(alpha, beta, target_dim=1, eps=1e-6)
+        unc_loss = self.unc_criterion(mu, alpha, beta, logits, y)
         unc_loss = (unc_loss["loss"] + unc_loss["identity_loss"] + unc_loss["nll_loss"]) / 3
 
-        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, "alpha": inv_alpha, "beta": beta, "loss": unc_loss}
+        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, "var": variance, "loss": unc_loss}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
