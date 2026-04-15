@@ -31,7 +31,7 @@ defaults:
 # task name, determines output directory path
 logger:
   wandb:
-    name: toy_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    name: hook_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
 task_name: "train"
 
 # tags to help you identify your experiments

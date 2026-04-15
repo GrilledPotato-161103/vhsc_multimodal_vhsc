@@ -220,8 +220,8 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     expression=self.hparams.expression,
                                                     x1_range=self.hparams.x1_range,
                                                     x2_range=self.hparams.x2_range,
-                                                    noise_std=0,
-                                                    noise_ratio=0,
+                                                    noise_std=0.,
+                                                    noise_ratio=0.,
                                                     generator=generator,
                                                     seed=self.hparams.seed,
                                                     )
@@ -231,8 +231,8 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     expression=self.hparams.expression,
                                                     x1_range=self.hparams.x1_range,
                                                     x2_range=self.hparams.x2_range,
-                                                    noise_std=0,
-                                                    noise_ratio=0,
+                                                    noise_std=0.,
+                                                    noise_ratio=0.,
                                                     generator=generator,
                                                     seed=self.hparams.seed,
                                                     )
