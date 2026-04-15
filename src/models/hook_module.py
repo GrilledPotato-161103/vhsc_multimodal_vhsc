@@ -284,7 +284,7 @@ class ModelInjectModule(LightningModule):
                 if x2.grad is not None: x2.grad.zero_()
                 
                 # Forward pass để tính loss
-                loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs)
+                loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
                 
                 signal = recon["trace"].trace["signal"]
                 kwargs["bp_signal"] = signal
