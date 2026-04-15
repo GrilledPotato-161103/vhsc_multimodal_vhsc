@@ -86,7 +86,7 @@ class BayesCap1D(nn.Module):
             nn.Linear(hidden_dim, input_dim),
         )
 
-        self.inv_alpha_head = nn.Sequential(
+        self.alpha_head = nn.Sequential(
             nn.LayerNorm(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
             act(),
@@ -122,12 +122,12 @@ class BayesCap1D(nn.Module):
         h = self.blocks(h)
 
         mu = self.mu_head(h)
-        inv_alpha = F.softplus(self.inv_alpha_head(h)) + self.eps
+        alpha = F.softplus(self.alpha_head(h)) + self.eps
         beta = F.softplus(self.beta_head(h)) + self.eps
 
         out_prefix = original_shape[:-1]
         mu = mu.view(*out_prefix, self.input_dim)
-        inv_alpha = inv_alpha.view(*out_prefix, self.uncertainty_dim)
+        alpha = alpha.view(*out_prefix, self.uncertainty_dim)
         beta = beta.view(*out_prefix, self.uncertainty_dim)
         cls = BreakpointOutput(
                 fn_name=self.forward.__qualname__,
@@ -136,39 +136,10 @@ class BayesCap1D(nn.Module):
                 trace={
                        "signal": ctx.bp_kwargs,
                        "input": y_hat,
-                       "output": (mu, inv_alpha, beta)
+                       "output": (mu, alpha, beta)
                        }
         )
         return cls
-
-
-# -----------------------------
-# Wrapper: frozen model + BayesCap
-# -----------------------------
-class FrozenModelWithBayesCap1D(nn.Module):
-    """
-    Wrap a pretrained frozen model Psi and a 1D BayesCap head Omega.
-
-    Psi(x) -> y_hat [..., D]
-    Omega(y_hat) -> (mu, inv_alpha, beta)
-    """
-
-    def __init__(self, frozen_model: nn.Module, bayescap: BayesCap1D) -> None:
-        super().__init__()
-        self.frozen_model = frozen_model
-        self.bayescap = bayescap
-
-        for p in self.frozen_model.parameters():
-            p.requires_grad = False
-        self.frozen_model.eval()
-
-    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        with torch.no_grad():
-            y_hat = self.frozen_model(x)
-
-        mu, inv_alpha, beta = self.bayescap(y_hat)
-        return y_hat, mu, inv_alpha, beta
-
 
 # -----------------------------
 # Loss
@@ -225,20 +196,20 @@ class BayesCap1DLoss(nn.Module):
     def _broadcast_uncertainty(
         self,
         mu: Tensor,
-        inv_alpha: Tensor,
+        alpha: Tensor,
         beta: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         # Support scalar uncertainty per sample: [..., 1] -> [..., D]
-        if inv_alpha.shape[-1] == 1 and mu.shape[-1] > 1:
-            inv_alpha = inv_alpha.expand_as(mu)
+        if alpha.shape[-1] == 1 and mu.shape[-1] > 1:
+            alpha = alpha.expand_as(mu)
         if beta.shape[-1] == 1 and mu.shape[-1] > 1:
             beta = beta.expand_as(mu)
-        if inv_alpha.shape != mu.shape or beta.shape != mu.shape:
+        if alpha.shape != mu.shape or beta.shape != mu.shape:
             raise ValueError(
-                f"After broadcasting, expected inv_alpha/beta to match mu shape. "
-                f"Got mu={mu.shape}, inv_alpha={inv_alpha.shape}, beta={beta.shape}"
+                f"After broadcasting, expected alpha/beta to match mu shape. "
+                f"Got mu={mu.shape}, alpha={alpha.shape}, beta={beta.shape}"
             )
-        return inv_alpha, beta
+        return alpha, beta
 
     def identity_loss(self, mu: Tensor, y_hat: Tensor) -> Tensor:
         if self.identity_mode == "l2":
@@ -248,36 +219,36 @@ class BayesCap1DLoss(nn.Module):
     def generalized_gaussian_nll(
         self,
         mu: Tensor,
-        inv_alpha: Tensor,
+        alpha: Tensor,
         beta: Tensor,
         y_true: Tensor,
     ) -> Tensor:
-        inv_alpha, beta = self._broadcast_uncertainty(mu, inv_alpha, beta)
+        alpha, beta = self._broadcast_uncertainty(mu, alpha, beta)
 
-        inv_alpha = inv_alpha.clamp_min(self.eps)
+        alpha = alpha.clamp_min(self.eps)
         beta = beta.clamp_min(self.eps)
         abs_err = torch.abs(mu - y_true)
 
         if self.nll_mode == "paper":
             # Exact paper-style expression, using inv_alpha = 1 / alpha
             # (|mu-y| / alpha)^beta = (|mu-y| * inv_alpha)^beta
-            scaled = (abs_err * inv_alpha).clamp(
+            scaled = (abs_err / alpha).clamp(
                 min=self.resi_min, max=self.resi_max
             )
             nll = (
                 torch.pow(scaled, beta)
-                - torch.log(inv_alpha)
+                + torch.log(alpha)
                 - torch.log(beta)
                 + torch.lgamma(1.0 / beta)
             )
         else:
             # Repo-compatible simplified form
-            scaled = (abs_err * inv_alpha * beta).clamp(
+            scaled = (abs_err / alpha * beta).clamp(
                 min=self.resi_min, max=self.resi_max
             )
             nll = (
                 scaled
-                - torch.log(inv_alpha)
+                + torch.log(alpha)
                 + torch.lgamma(1.0 / beta)
                 - torch.log(beta)
             )
@@ -287,7 +258,7 @@ class BayesCap1DLoss(nn.Module):
     def forward(
         self,
         mu: Tensor,
-        inv_alpha: Tensor,
+        alpha: Tensor,
         beta: Tensor,
         y_hat: Tensor,
         y_true: Tensor,
@@ -298,7 +269,7 @@ class BayesCap1DLoss(nn.Module):
             )
 
         loss_identity = self.identity_loss(mu, y_hat)
-        loss_nll = self.generalized_gaussian_nll(mu, inv_alpha, beta, y_true)
+        loss_nll = self.generalized_gaussian_nll(mu, alpha, beta, y_true)
         loss = self.lambda_identity * loss_identity + self.lambda_nll * loss_nll
 
         return {
@@ -312,7 +283,7 @@ class BayesCap1DLoss(nn.Module):
 # Variance utility
 # -----------------------------
 def bayescap_variance_1d(
-    inv_alpha: Tensor,
+    alpha: Tensor,
     beta: Tensor,
     target_dim: Optional[int] = None,
     eps: float = 1e-6,
@@ -323,74 +294,12 @@ def bayescap_variance_1d(
     variance = alpha^2 * Gamma(3 / beta) / Gamma(1 / beta)
     where alpha = 1 / inv_alpha
     """
-    inv_alpha = inv_alpha.clamp_min(eps)
+    alpha = alpha.clamp_min(eps)
     beta = beta.clamp_min(eps)
 
-    if target_dim is not None and inv_alpha.shape[-1] == 1 and target_dim > 1:
-        inv_alpha = inv_alpha.expand(*inv_alpha.shape[:-1], target_dim)
+    if target_dim is not None and alpha.shape[-1] == 1 and target_dim > 1:
+        alpha = alpha.expand(*alpha.shape[:-1], target_dim)
     if target_dim is not None and beta.shape[-1] == 1 and target_dim > 1:
         beta = beta.expand(*beta.shape[:-1], target_dim)
 
-    alpha = 1.0 / inv_alpha
     return alpha.pow(2) * torch.exp(torch.lgamma(3.0 / beta) - torch.lgamma(1.0 / beta))
-
-
-# -----------------------------
-# Example training step
-# -----------------------------
-def example_training_step() -> None:
-    class FrozenRegressor(nn.Module):
-        def __init__(self, in_dim: int, out_dim: int) -> None:
-            super().__init__()
-            self.net = nn.Sequential(
-                nn.Linear(in_dim, 128),
-                nn.ReLU(),
-                nn.Linear(128, out_dim),
-            )
-
-        def forward(self, x: Tensor) -> Tensor:
-            return self.net(x)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    batch_size, in_dim, out_dim = 16, 32, 8
-
-    frozen_model = FrozenRegressor(in_dim, out_dim).to(device)
-    bayescap = BayesCap1D(
-        input_dim=out_dim,
-        hidden_dims=[128, 128, 128],
-        per_dim_uncertainty=True,   # False -> one scalar alpha/beta per sample
-    ).to(device)
-
-    model = FrozenModelWithBayesCap1D(frozen_model, bayescap).to(device)
-
-    criterion = BayesCap1DLoss(
-        lambda_identity=1.0,
-        lambda_nll=0.05,
-        identity_mode="l2",   # "l1" to mimic repo
-        nll_mode="paper",     # "repo" to mimic repo
-    )
-
-    optimizer = torch.optim.Adam(model.bayescap.parameters(), lr=1e-4)
-
-    x = torch.randn(batch_size, in_dim, device=device)
-    y_true = torch.randn(batch_size, out_dim, device=device)
-
-    y_hat, mu, inv_alpha, beta = model(x)
-    losses = criterion(mu, inv_alpha, beta, y_hat, y_true)
-
-    optimizer.zero_grad()
-    losses["loss"].backward()
-    optimizer.step()
-
-    variance = bayescap_variance_1d(inv_alpha, beta, target_dim=out_dim)
-
-    print("y_hat:", y_hat.shape)
-    print("mu:", mu.shape)
-    print("inv_alpha:", inv_alpha.shape)
-    print("beta:", beta.shape)
-    print("variance:", variance.shape)
-    print("loss:", float(losses["loss"]))
-
-
-if __name__ == "__main__":
-    example_training_step()
