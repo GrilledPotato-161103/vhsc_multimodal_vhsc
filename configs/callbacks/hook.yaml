@@ -4,12 +4,9 @@ defaults:
   - model_summary
   - rich_progress_bar
   - plot
-  - test
   - _self_
 
-test:
-  every_n_epochs: 1
-  
+
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
