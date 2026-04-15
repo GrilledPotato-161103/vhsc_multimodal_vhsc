@@ -73,7 +73,9 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log_hyperparameters(object_dict)
 
     log.info("Starting testing!")
-    trainer.test(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"), weights_only=False)
+    net = torch.load(r"data/toy.pth", weights_only=False)
+    model.net = net
+    trainer.test(model=model, datamodule=datamodule, ckpt_path=None, weights_only=False)
 
     # for predictions use trainer.predict(...)
     # predictions = trainer.predict(model=model, dataloaders=dataloaders, ckpt_path=cfg.ckpt_path)

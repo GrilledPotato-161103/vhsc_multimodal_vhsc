@@ -21,13 +21,15 @@ compile: False
 
 recon_criterion:
   _target_: torch.nn.MSELoss
+  reduction: none
 
 unc_criterion:
   _target_: src.plugins.head.bayescap.BayesCap1DLoss
+  reduction: none
   lambda_identity: 1.0
   lambda_nll: 0.05
   identity_mode: l2
   nll_mode: paper
 
 epoch_phase: 10
-mask_rate: 0.3
+mask_rate: 0.

@@ -13,7 +13,6 @@ defaults:
   - paths: default
   - extras: default
   - hydra: default
-
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
   - experiment: null
@@ -28,15 +27,21 @@ defaults:
   # debugging config (enable through command line, e.g. `python train.py debug=default)
   - debug: null
 
+data:
+  n_samples: 50000
+  batch_size: 32
+  num_workers: 2
+
 # task name, determines output directory path
 logger:
   wandb:
+    project: "VISHC_Uncertainty"
     name: hook_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
 task_name: "train"
 
 callbacks:
   model_checkpoint:
-    monitor: "val/loss"
+    monitor: "val/loss_unc_best"
     mode: "min"
 
 # tags to help you identify your experiments
