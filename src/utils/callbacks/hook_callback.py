@@ -41,7 +41,7 @@ class AdversarialVizCallback(pl.Callback):
         self.losses = []
         self.variances = []
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if batch_idx != 0 or outputs is None or "postion" not in outputs:
             return
         # Lấy jump distance để tính loga của loss gain
@@ -82,7 +82,7 @@ class AdversarialVizCallback(pl.Callback):
         self.losses.append(losses)
         self.variances.append(variance)
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    def on_test_epoch_end(self, trainer, pl_module):
         # B*, N, 2
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
         directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)
@@ -175,7 +175,7 @@ class AdversarialVizCallback(pl.Callback):
             print("Wandb Logger not found, saving HTML files instead...")
             for name, fig in figs_to_log.items():
                 fig.write_html(f"{name.replace('/', '_')}_epoch_{trainer.current_epoch}.html")
-        
+        # Trả về state ban đầu
         self.reset_states()
 
 
