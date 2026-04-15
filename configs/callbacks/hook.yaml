@@ -7,6 +7,9 @@ defaults:
   - test
   - _self_
 
+test:
+  every_n_epochs: 1
+  
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
@@ -16,8 +19,8 @@ model_checkpoint:
   auto_insert_metric_name: False
 
 early_stopping:
-  monitor: "val/loss_unc_best"
-  patience: 5
+  monitor: val/loss_unc_11
+  patience: 200
   mode: "min"
 
 model_summary:
