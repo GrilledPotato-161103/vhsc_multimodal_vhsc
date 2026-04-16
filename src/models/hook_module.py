@@ -61,11 +61,15 @@ class ModelInjectModule(LightningModule):
         self.val_recon_loss = MeanMetric()
         self.test_recon_loss = MeanMetric()
 
-        self.train_acc = MeanMetric()
-        self.val_acc = MeanMetric()
-        self.test_acc = MeanMetric()
+        self.train_id = MeanMetric()
+        self.val_id = MeanMetric()
+        self.test_id = MeanMetric()
 
-        self.val_acc_best = MinMetric()
+        self.train_nll = MeanMetric()
+        self.val_nll = MeanMetric()
+        self.test_nll = MeanMetric()
+
+        self.val_nll_best = MinMetric()
 
         self.criterion = torch.nn.MSELoss()
         self.recon_criterion = recon_criterion
@@ -163,9 +167,12 @@ class ModelInjectModule(LightningModule):
         (mu, alpha, beta) = unc_trace.trace["output"]
         variance = bayescap_variance_1d(alpha, beta, target_dim=1, eps=1e-6)
         unc_loss = self.unc_criterion(mu, alpha, beta, logits, y)
-        unc_loss = (unc_loss["loss"] + unc_loss["identity_loss"] + unc_loss["nll_loss"]) / 3
 
-        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, "var": variance, "loss": unc_loss}
+        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, 
+                                                                             "var": variance, 
+                                                                             "loss": unc_loss["loss"], 
+                                                                             "id_loss": unc_loss["identity_loss"],
+                                                                             "nll_loss": unc_loss["nll_loss"]}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -197,9 +204,16 @@ class ModelInjectModule(LightningModule):
                     prog_bar=True)
         
         
-        self.train_acc(unc["loss"].mean())
-        self.log(f"train/loss_unc_{signal_str}", 
-                self.train_acc, 
+        self.train_id(unc["identity"].mean())
+        self.log(f"train/loss_id_{signal_str}", 
+                self.train_id, 
+                on_step=True, 
+                on_epoch=True, 
+                prog_bar=True)
+        
+        self.train_nll(unc["nll"].mean())
+        self.log(f"train/loss_nll_{signal_str}", 
+                self.train_id, 
                 on_step=True, 
                 on_epoch=True, 
                 prog_bar=True)
@@ -242,9 +256,16 @@ class ModelInjectModule(LightningModule):
                     on_epoch=True, 
                     prog_bar=True)
         
-        self.val_acc(unc["loss"].mean())
-        self.log(f"val/loss_unc_{signal_str}", 
-                self.val_acc, 
+        self.val_id(unc["identity"].mean())
+        self.log(f"val/loss_id_{signal_str}", 
+                self.val_id, 
+                on_step=True, 
+                on_epoch=True, 
+                prog_bar=True)
+
+        self.val_nll(unc["nll"].mean())
+        self.log(f"val/loss_nll_{signal_str}", 
+                self.val_nll, 
                 on_step=True, 
                 on_epoch=True, 
                 prog_bar=True)
@@ -316,11 +337,11 @@ class ModelInjectModule(LightningModule):
         
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
-        acc = self.val_acc.compute()  # get current val acc
-        self.val_acc_best(acc)  # update best so far val acc
-        # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
+        acc = self.val_id.compute()  # get current val acc
+        self.val_id_best(acc)  # update best so far val acc
+        # log `val_id_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("val/loss_unc_best", self.val_acc_best.compute(), sync_dist=True, prog_bar=True)
+        self.log("val/loss_id_best", self.val_id_best.compute(), sync_dist=True, prog_bar=True)
 
     def on_test_epoch_start(self):
         print("Testing and Ablation study on epoch", self.current_epoch)
@@ -351,10 +372,17 @@ class ModelInjectModule(LightningModule):
                     on_epoch=True, 
                     prog_bar=True)
         
-        self.test_acc(unc["loss"].mean())
-        self.log(f"test/loss_unc_{signal_str}", 
-                self.test_acc, 
+        self.test_id(unc["identity"].mean())
+        self.log(f"test/loss_id_{signal_str}", 
+                self.test_id, 
                 on_step=False, 
+                on_epoch=True, 
+                prog_bar=True)
+        
+        self.test_nll(unc["nll"].mean())
+        self.log(f"test/loss_nll_{signal_str}", 
+                self.test_nll, 
+                on_step=True, 
                 on_epoch=True, 
                 prog_bar=True)
         
@@ -392,7 +420,7 @@ class ModelInjectModule(LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "monitor": "val/loss_unc_11",
+                    "monitor": "val/loss_id_11",
                     "interval": "epoch",
                     "frequency": 1,
                 },
