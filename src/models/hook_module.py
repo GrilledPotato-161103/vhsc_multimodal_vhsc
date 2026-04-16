@@ -419,7 +419,7 @@ class ModelInjectModule(LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "monitor": "val/loss_id_11",
+                    "monitor": "val/loss_nll_11",
                     "interval": "epoch",
                     "frequency": 1,
                 },
