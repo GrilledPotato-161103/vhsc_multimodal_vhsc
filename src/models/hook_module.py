@@ -223,7 +223,7 @@ class ModelInjectModule(LightningModule):
             unc["loss"] *= 0
 
         # return loss or backpropagation will fail
-        return loss + recon["loss"].mean() + unc["loss"].mean()
+        return loss.mean() + recon["loss"].mean() + unc["loss"].mean()
 
     def on_validation_start(self) -> None:
         self.controller.eval()
@@ -293,7 +293,7 @@ class ModelInjectModule(LightningModule):
                 signal = recon["trace"].trace["signal"]
                 kwargs["bp_signal"] = signal
                 # Lan truyền ngược để trích xuất gradient
-                loss.backward()
+                loss.mean().backward()
                 # Normalize gradient để trích xuất pha only
                 grad_norm = torch.sqrt(x1.grad ** 2 + x2.grad ** 2)
                 x1_jump = x1.grad.sign() / grad_norm
