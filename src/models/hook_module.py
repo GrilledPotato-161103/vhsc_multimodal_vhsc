@@ -45,7 +45,7 @@ class ModelInjectModule(LightningModule):
                  unc_criterion: nn.Module | Callable | None = nn.MSELoss(),
                  epoch_phase: int = 20,
                  mask_rate: float = 0.3,
-                 eta: float = 0.1,
+                 eta: float = 0.05,
                  n_jumps: int = 8
                  ) -> None:
         super().__init__()
@@ -300,8 +300,8 @@ class ModelInjectModule(LightningModule):
                 x2_jump = x2.grad.sign() / grad_norm
                 # Cập nhật vào bảng kết quả để đưa ra callback visualize
                 result["losses"].append(loss.clone().detach())
-                result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
-                result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
+                result["postions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
+                result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
                 result["intensity"].append(grad_norm)
                 result["uncertainty"].append(unc)
                 # 3. Cập nhật dữ liệu x1, x2 để TĂNG loss
@@ -326,8 +326,8 @@ class ModelInjectModule(LightningModule):
             loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
             result["losses"].append(loss.clone().detach())
             # N (B, 2)
-            result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
-            result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
+            result["postions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
+            result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
             result["uncertainty"].append(unc)
         result["bp_signal"] = kwargs["bp_signal"]
         # Trả result để callback nhận và digest        
