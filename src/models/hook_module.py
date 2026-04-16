@@ -336,11 +336,11 @@ class ModelInjectModule(LightningModule):
         
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
-        acc = self.val_id.compute()  # get current val acc
-        self.val_id_best(acc)  # update best so far val acc
+        score = self.val_nll.compute()  # get current val acc
+        self.val_nll_best(score)  # update best so far val acc
         # log `val_id_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("val/loss_id_best", self.val_id_best.compute(), sync_dist=True, prog_bar=True)
+        self.log("val/loss_nll_best", self.val_nll_best.compute(), sync_dist=True, prog_bar=True)
 
     def on_test_epoch_start(self):
         print("Testing and Ablation study on epoch", self.current_epoch)
