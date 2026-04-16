@@ -1,5 +1,6 @@
 from typing import Any, Dict, Tuple, Callable
 from collections import defaultdict
+import math
 import numpy as np
 
 import torch
@@ -37,6 +38,7 @@ class ModelInjectModule(LightningModule):
                  unc_bp: str,
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
+                 expression: str | None = None, 
                  controller: BreakpointController | None = None,
                  compile: bool = False,
                  recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
@@ -68,6 +70,33 @@ class ModelInjectModule(LightningModule):
         self.criterion = torch.nn.MSELoss()
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
+    
+
+    def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+        """
+        Evaluate expression like:
+            'x1**2 + 2*x2 + torch.sin(x1)'
+        in a restricted namespace.
+        """
+        safe_globals = {"__builtins__": {}}
+        safe_locals = {
+            "x1": x1,
+            "x2": x2,
+            "torch": torch,
+            "math": math,
+        } 
+
+        try:
+            y = eval(self.hparams.expression, safe_globals, safe_locals)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to evaluate expression: {self.expression!r}. Error: {e}"
+            ) from e
+
+        if not isinstance(y, torch.Tensor):
+            y = torch.as_tensor(y, dtype=self.dtype)
+
+        return y.to(self.dtype)
         
     def forward(self, x: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
         """
@@ -196,7 +225,7 @@ class ModelInjectModule(LightningModule):
         """
         
         # Cached files
-        loss, logits, _, recon, unc = self.model_step(batch,    kwargs={"bp_signal": (1, 1)})
+        loss, logits, _, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         self.val_loss(loss)
@@ -261,6 +290,7 @@ class ModelInjectModule(LightningModule):
                     # Đẩy lên dốc (Gradient Ascent)
                     x1_new = x1 + self.hparams.eta * x1_jump # [cite: 92]
                     x2_new = x2 + self.hparams.eta * x2_jump
+                    
                     # (Tùy chọn) Thêm bước Projection (cắt tỉa) nếu bạn muốn giới hạn nhiễu epsilon
                     # x1_new = torch.clamp(x1_new, x1_orig - epsilon, x1_orig + epsilon)
                     # x2_new = torch.clamp(x2_new, x2_orig - epsilon, x2_orig + epsilon)
@@ -268,6 +298,7 @@ class ModelInjectModule(LightningModule):
                 # Gán lại giá trị và bật requires_grad cho bước lặp tiếp theo
                 x1 = x1_new.requires_grad_(True)
                 x2 = x2_new.requires_grad_(True)
+                y = self._evaluate_expression(x1, x2)
 
         # 4. Đánh giá lại mô hình trên dữ liệu đã bị tấn công (Adversarial Data)
         # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường

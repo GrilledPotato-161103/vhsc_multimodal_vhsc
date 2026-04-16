@@ -8,8 +8,8 @@ num_workers: 2
 val_ratio: 0.1
 test_ratio: 0.1
 
-x1_range: [-1.0, 1.0]
-x2_range: [-1.0, 1.0]
+x1_range: [-0.3, 1.3]
+x2_range: [-0.3, 1.3]
 
 noise_std: 0.1
 seed: 42
