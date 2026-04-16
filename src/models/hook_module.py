@@ -171,8 +171,8 @@ class ModelInjectModule(LightningModule):
         return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, 
                                                                              "var": variance, 
                                                                              "loss": unc_loss["loss"], 
-                                                                             "id_loss": unc_loss["identity"],
-                                                                             "nll_loss": unc_loss["nll"]}
+                                                                             "identity": unc_loss["identity_loss"],
+                                                                             "nll": unc_loss["nll_loss"]}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
