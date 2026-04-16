@@ -71,7 +71,7 @@ class ModelInjectModule(LightningModule):
 
         self.val_nll_best = MinMetric()
 
-        self.criterion = torch.nn.MSELoss()
+        self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
     
@@ -299,7 +299,7 @@ class ModelInjectModule(LightningModule):
                 x1_jump = x1.grad.sign() / grad_norm
                 x2_jump = x2.grad.sign() / grad_norm
                 # Cập nhật vào bảng kết quả để đưa ra callback visualize
-                result["losses"].append(loss.clone().detach().item())
+                result["losses"].append(loss.clone().detach())
                 result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
                 result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
                 result["intensity"].append(grad_norm)
@@ -324,7 +324,7 @@ class ModelInjectModule(LightningModule):
         # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường
         with torch.no_grad():
             loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
-            result["losses"].append(loss.clone().detach().item())
+            result["losses"].append(loss.clone().detach())
             # N (B, 2)
             result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
             result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
