@@ -290,7 +290,6 @@ class ModelInjectModule(LightningModule):
                 
                 # Forward pass để tính loss
                 loss, logits, _, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
-                
                 signal = recon["trace"].trace["signal"]
                 kwargs["bp_signal"] = signal
                 # Lan truyền ngược để trích xuất gradient
@@ -300,7 +299,7 @@ class ModelInjectModule(LightningModule):
                 x1_jump = x1.grad.sign() / grad_norm
                 x2_jump = x2.grad.sign() / grad_norm
                 # Cập nhật vào bảng kết quả để đưa ra callback visualize
-                result["losses"].append(loss.clone().detach())
+                result["losses"].append(loss.clone().detach().item())
                 result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
                 result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
                 result["intensity"].append(grad_norm)
@@ -325,7 +324,7 @@ class ModelInjectModule(LightningModule):
         # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường
         with torch.no_grad():
             loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
-            result["losses"].append(loss.clone().detach())
+            result["losses"].append(loss.clone().detach().item())
             # N (B, 2)
             result["postion"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
             result["direction"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
