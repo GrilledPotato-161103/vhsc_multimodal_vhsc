@@ -42,9 +42,9 @@ class AdversarialVizCallback(pl.Callback):
         self.losses = []
         self.variances = []
     
-    def on_validation_epoch_start(self, trainer, pl_module):
-        print("Callback visited")
-        return super().on_test_epoch_start(trainer, pl_module)
+    # def on_validation_epoch_start(self, trainer, pl_module):
+    #     print("Callback visited")
+    #     return super().on_test_epoch_start(trainer, pl_module)
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if batch_idx != 0 or outputs is None or "postion" not in outputs:
@@ -169,6 +169,7 @@ class AdversarialVizCallback(pl.Callback):
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger
         if isinstance(trainer.logger, pl.loggers.WandbLogger):
+            print("Is Wandb logger")
             wandb_logger = trainer.logger.experiment
             
             log_dict = {
@@ -177,7 +178,7 @@ class AdversarialVizCallback(pl.Callback):
             log_dict["global_step"] = trainer.global_step
             log_dict["epoch"] = trainer.current_epoch
             
-            wandb_logger.log(log_dict)
+            wandb.log(log_dict)
         else:
             # Nếu chạy nội bộ không có wandb, lưu file html để debug
             print("Wandb Logger not found, saving HTML files instead...")
