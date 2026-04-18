@@ -60,12 +60,12 @@ class AdversarialVizCallback(pl.Callback):
         positions = torch.stack(outputs["positions"], dim=0)
         # Get loss gain
         losses_gain = torch.log(losses - losses[:, [0]])
-        # N
-        jumps = torch.arange(0, pl_module.hparams.n_jumps) * pl_module.hparams.eta
         # B, N
-        jumps = torch.stack([jumps] * losses.shape[0], axis=0).to(losses.device)
+        jumps = torch.full_like(losses_gain, pl_module.hparams.eta)
+        jumps[:, 0] = 0
+        jumps = torch.cumsum(jumps, dim=1).to(losses_gain.device)
         # B, N, 2
-        jumps_one = torch.nn.functional.pad(jumps, (0, 1), value=1)
+        jumps_one = torch.nn.functional.pad(jumps.unsqueeze(-1), (0, 1), value=1)
         print(jumps_one.shape)
         weights, _, _, _ = torch.linalg.lstsq(jumps_one.flatten(0), losses_gain.flatten(0))
 
