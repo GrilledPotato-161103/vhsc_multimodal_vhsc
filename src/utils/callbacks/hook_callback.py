@@ -51,8 +51,8 @@ class AdversarialVizCallback(pl.Callback):
             return
         # Lấy jump distance để tính loga của loss gain
         bp_signal = outputs["bp_signal"]
-        for key in outputs: 
-            print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else "")
+        # for key in outputs: 
+        #     print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else "")
         # import IPython; IPython.embed()
         # B*, N
         losses = torch.stack(outputs["losses"], dim=0)
@@ -90,16 +90,15 @@ class AdversarialVizCallback(pl.Callback):
         self.intensities.append(torch.stack(outputs["intensities"], dim=0))
         self.losses.append(losses)
         self.variances.append(variance)
-        return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
+        return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
     def on_validation_epoch_end(self, trainer, pl_module):
         print("Valid epoch end called", len(self.losses))
         if len(self.losses) <= 1:
-            return super().on_test_epoch_end(trainer, pl_module)
+            return super().on_validation_epoch_end(trainer, pl_module)
         # B*, N, 2
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
         directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)
-        
         # B*, N, 1
         intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten()
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
@@ -192,7 +191,7 @@ class AdversarialVizCallback(pl.Callback):
                 fig.write_html(f"{name.replace('/', '_')}_epoch_{trainer.current_epoch}.html")
         # Trả về state ban đầu
         self.reset_states()
-        return super().on_test_epoch_end(trainer, pl_module)
+        return super().on_validation_epoch_end(trainer, pl_module)
 
 
 
