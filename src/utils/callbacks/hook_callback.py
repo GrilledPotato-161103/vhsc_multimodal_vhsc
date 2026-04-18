@@ -138,7 +138,7 @@ class AdversarialVizCallback(pl.Callback):
 
         # --- A. Quiver Plot (Trường Vector) ---
         # Lấy mẫu thưa hơn để biểu đồ không bị rối mịt mù
-        slice_idx = (slice(None, None, self.arrow_step), slice(None, None, self.arrow_step))
+        slice_idx = (slice(None, None, 2), slice(None, None, 2))
         fig_quiver = ff.create_quiver(
             grid_x[slice_idx], grid_y[slice_idx], 
             u_grid[slice_idx], v_grid[slice_idx],
