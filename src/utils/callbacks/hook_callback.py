@@ -168,9 +168,8 @@ class AdversarialVizCallback(pl.Callback):
 
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger
-        print(type(trainer.logger))
 
-        if isinstance(trainer.logger, pl.loggers.WandbLogger):
+        if "WandbLogger" in trainer.logger.__name__:
             print("Is Wandb logger")
             wandb_logger = trainer.logger.experiment
             log_dict = {
