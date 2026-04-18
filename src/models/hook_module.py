@@ -300,7 +300,7 @@ class ModelInjectModule(LightningModule):
                 x2_jump = x2.grad.sign() / grad_norm
                 # Cập nhật vào bảng kết quả để đưa ra callback visualize
                 result["losses"].append(loss.clone().detach())
-                result["postions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
+                result["positions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
                 result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
                 result["intensities"].append(grad_norm.detach())
                 result["variances"].append(unc["var"].detach())
