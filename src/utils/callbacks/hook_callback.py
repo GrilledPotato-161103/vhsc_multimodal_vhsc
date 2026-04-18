@@ -47,8 +47,7 @@ class AdversarialVizCallback(pl.Callback):
     #     return super().on_test_epoch_start(trainer, pl_module)
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        if batch_idx != 0 or outputs is None or "postions" not in outputs:
-            return
+        print("trainer batch end met")
         # Lấy jump distance để tính loga của loss gain
         bp_signal = outputs["bp_signal"]
         # for key in outputs: 
