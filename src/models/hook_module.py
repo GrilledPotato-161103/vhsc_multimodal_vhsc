@@ -302,8 +302,8 @@ class ModelInjectModule(LightningModule):
                 result["losses"].append(loss.clone().detach())
                 result["postions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
                 result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
-                result["intensity"].append(grad_norm)
-                result["uncertainty"].append(unc)
+                result["intensities"].append(grad_norm.detach())
+                result["variances"].append(unc["var"].detach())
                 # 3. Cập nhật dữ liệu x1, x2 để TĂNG loss
                 # Thao tác này phải nằm trong no_grad để không bị theo dõi vào đồ thị
                 with torch.no_grad():

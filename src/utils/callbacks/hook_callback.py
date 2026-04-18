@@ -51,12 +51,12 @@ class AdversarialVizCallback(pl.Callback):
             return
         # Lấy jump distance để tính loga của loss gain
         bp_signal = outputs["bp_signal"]
-        for key in outputs: 
-            print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else outputs[key][0])
-        # B, N
-        losses = torch.stack(outputs["losses"], dim=1)
+        # for key in outputs: 
+        #     print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else outputs[key][0])
+        # B*, N
+        losses = torch.stack(outputs["losses"], dim=0)
         # B, N, 2
-        positions = torch.stack(outputs["positions"], dim=1)
+        positions = torch.stack(outputs["positions"], dim=0)
         # Get loss gain
         losses_gain = torch.log(losses - losses[:, [0]])
         # N
@@ -75,7 +75,7 @@ class AdversarialVizCallback(pl.Callback):
                         on_epoch=True,
                         prog_bar=False)
         
-        variance = torch.stack([unc["var"].detach() for unc in outputs["uncertainty"]], dim=1)
+        variance = torch.stack(outputs["variances"], dim=0)
         pcc = pearson_correlation(variance, losses)
         pl_module.log(f"val/loss_unc_pcc_{pl_module.hparams.eta:.2f}",
                         pcc.item(), 
@@ -84,8 +84,8 @@ class AdversarialVizCallback(pl.Callback):
                         prog_bar=False)
         
         self.positions.append(positions)
-        self.directions.append(torch.stack(outputs["directions"], dim=1))
-        self.intensities.append(torch.stack(outputs["intensity"], dim=1))
+        self.directions.append(torch.stack(outputs["directions"], dim=0))
+        self.intensities.append(torch.stack(outputs["intensities"], dim=0))
         self.losses.append(losses)
         self.variances.append(variance)
         return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
