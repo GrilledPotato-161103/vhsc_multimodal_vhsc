@@ -1,3 +1,4 @@
 plot:
   _target_: src.utils.callbacks.hook_callback.AdversarialVizCallback
   grid_size: 100
+  smooth: 1.

@@ -36,8 +36,8 @@ class BilinearReconstructor(nn.Module):
         self.d_2 = d_2
         self.ln12 = FeedForward(in_dim=d_1, hidden_dim=hidden_dim, out_dim=d_2, activation=activation, norm=norm, dropout=dropout, adn_order=order)
         self.ln21 = FeedForward(in_dim=d_2, hidden_dim=hidden_dim, out_dim=d_1, activation=activation, norm=norm, dropout=dropout, adn_order=order)
-        self.dev1 = nn.Sequential(nn.Softplus(), FeedForward(in_dim=d_1 + d_2, hidden_dim=hidden_dim * 2, out_dim=d_1, activation=activation, norm=norm, dropout=dropout, adn_order=order))
-        self.dev2 = nn.Sequential(nn.Softplus(), FeedForward(in_dim=d_1 + d_2, hidden_dim=hidden_dim * 2, out_dim=d_2, activation=activation, norm=norm, dropout=dropout, adn_order=order))        
+        self.dev1 = nn.Sequential(FeedForward(in_dim=d_1 + d_2, hidden_dim=hidden_dim * 2, out_dim=d_1, activation=activation, norm=norm, dropout=dropout, adn_order=order), nn.ReLU())
+        self.dev2 = nn.Sequential(FeedForward(in_dim=d_1 + d_2, hidden_dim=hidden_dim * 2, out_dim=d_2, activation=activation, norm=norm, dropout=dropout, adn_order=order), nn.ReLU())        
         # To help on learning distance
         self.dist = dist
     
@@ -54,8 +54,8 @@ class BilinearReconstructor(nn.Module):
             (p1, p2) = (1, 1)
         rec_2 = self.ln12(mod_1) if p1 == 0 else mod_2
         rec_1 = self.ln21(mod_2) if p2 == 0 else mod_1
-        dist_1 = self.dist(rec_1, mod_2)
-        dist_2 = self.dist(rec_2, mod_1)
+        dist_1 = self.dist(rec_2, mod_2)
+        dist_2 = self.dist(rec_1, mod_1)
         output = (rec_1, rec_2)
         if self.concat:
             merged = torch.cat(output, dim=-1)

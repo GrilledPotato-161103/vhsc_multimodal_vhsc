@@ -29,9 +29,10 @@ def pearson_correlation(x: torch.Tensor, y: torch.Tensor):
     return numerator / denominator
 
 class AdversarialVizCallback(pl.Callback):
-    def __init__(self, grid_size: int = 50):
+    def __init__(self, grid_size: int = 50, smooth: float = 2.):
         super().__init__()
         self.grid_size = grid_size # Độ phân giải của lưới (mesh)
+        self.smooth = smooth
         self.reset_states()
         print("Visualizer Created")
 
@@ -125,9 +126,9 @@ class AdversarialVizCallback(pl.Callback):
 
         # 4. Làm mịn và tính Covariance (Local Covariance)
         # E[L], E[V], E[L*V] thông qua Gaussian filter
-        loss_smooth = gaussian_filter(loss_grid, sigma=self.smooth_sigma)
-        var_smooth = gaussian_filter(var_grid, sigma=self.smooth_sigma)
-        loss_var_smooth = gaussian_filter(loss_grid * var_grid, sigma=self.smooth_sigma)
+        loss_smooth = gaussian_filter(loss_grid, sigma=self.smooth)
+        var_smooth = gaussian_filter(var_grid, sigma=self.smooth)
+        loss_var_smooth = gaussian_filter(loss_grid * var_grid, sigma=self.smooth)
         
         # Cov(L, V) = E[LV] - E[L]E[V]
         cov_grid = loss_var_smooth - (loss_smooth * var_smooth)

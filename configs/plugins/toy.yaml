@@ -10,14 +10,14 @@ breakpoints:
         _target_: src.plugins.reconstructor.linear.BilinearReconstructor
         d_1: 16
         d_2: 16
-        hidden_dim: 32
+        hidden_dim: 24
         activation: silu
         norm: layernorm
         dropout: 0.5
         order: adn
         concat: true
         dist: 
-          _target_: torch.nn.L1Loss
+          _target_: torch.nn.MSELoss
           reduction: none
       mutate: true
       valid: true
