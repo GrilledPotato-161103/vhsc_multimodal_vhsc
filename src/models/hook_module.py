@@ -322,13 +322,6 @@ class ModelInjectModule(LightningModule):
 
         # 4. Đánh giá lại mô hình trên dữ liệu đã bị tấn công (Adversarial Data)
         # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường
-        with torch.no_grad():
-            loss, logits, y, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
-            result["losses"].append(loss.clone().detach())
-            # N (B, 2)
-            result["postions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
-            result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
-            result["variances"].append(unc["var"])
         result["bp_signal"] = kwargs["bp_signal"]
         # Trả result để callback nhận và digest        
         return result
