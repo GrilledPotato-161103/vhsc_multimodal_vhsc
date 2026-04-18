@@ -328,7 +328,7 @@ class ModelInjectModule(LightningModule):
             # N (B, 2)
             result["postions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
             result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
-            result["uncertainty"].append(unc)
+            result["variances"].append(unc["var"])
         result["bp_signal"] = kwargs["bp_signal"]
         # Trả result để callback nhận và digest        
         return result
