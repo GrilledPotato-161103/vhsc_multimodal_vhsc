@@ -104,7 +104,7 @@ class AdversarialVizCallback(pl.Callback):
         intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten()
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
         variances = torch.concatenate(self.variances, dim=0).cpu().numpy().flatten()
-        x, y = positions[:, 0]
+        x, y = positions[..., 0].flatten(), positions[..., 1].flatten()
         grid_x, grid_y = np.mgrid[:self.grid_size, :self.grid_size]
 
         # Hàm nội suy từ điểm phân tán lên lưới
