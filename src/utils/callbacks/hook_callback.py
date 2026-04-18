@@ -89,8 +89,9 @@ class AdversarialVizCallback(pl.Callback):
         return super().on_test_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        if len(self.losses) <= 1:
-            return super().on_test_epoch_end(trainer, pl_module)
+        print("Valid epoch end called")
+        # if len(self.losses) <= 1:
+        #     return super().on_test_epoch_end(trainer, pl_module)
         # B*, N, 2
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
         directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)
@@ -169,7 +170,7 @@ class AdversarialVizCallback(pl.Callback):
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger
         print(type(trainer.logger))
-        
+
         if isinstance(trainer.logger, pl.loggers.WandbLogger):
             print("Is Wandb logger")
             wandb_logger = trainer.logger.experiment
