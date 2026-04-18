@@ -51,8 +51,8 @@ class AdversarialVizCallback(pl.Callback):
             return
         # Lấy jump distance để tính loga của loss gain
         bp_signal = outputs["bp_signal"]
-        # for key in outputs: 
-        #     print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else outputs[key][0])
+        for key in outputs: 
+            print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else "")
         # B*, N
         losses = torch.stack(outputs["losses"], dim=0)
         # B, N, 2
