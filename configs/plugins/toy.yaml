@@ -12,7 +12,7 @@ breakpoints:
         d_2: 16
         hidden_dim: 24
         activation: silu
-        norm: layer
+        norm: batch
         dropout: 0.5
         order: adn
         concat: true
