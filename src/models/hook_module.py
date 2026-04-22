@@ -254,11 +254,11 @@ class ModelInjectModule(LightningModule):
         optimizer,
         optimizer_closure,
     ) -> None:
-        # Check gradient at step
-        print(f"Checking gradient for frozen model {self.net.__class__.__qualname__}")
-        check_gradient(self.net)
-        
+
         if batch_idx == 1:
+            # Check gradient at step
+            print(f"Checking gradient for frozen model {self.net.__class__.__qualname__}")
+            check_gradient(self.net)
             for item in self.controller.breakpoints:
                 pos, bp = item['position'], item["breakpoint"]
                 print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
