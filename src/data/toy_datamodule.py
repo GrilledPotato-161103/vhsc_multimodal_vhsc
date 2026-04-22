@@ -224,7 +224,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     sampling="uniform"
                                                     )
         self.val_dataset = BiModalEquationDataset(
-                                                    n_samples=n_train,
+                                                    n_samples=n_val,
                                                     expression=self.hparams.expression,
                                                     x1_range=self.hparams.x1_range,
                                                     x2_range=self.hparams.x2_range,
@@ -235,7 +235,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     )
 
         self.test_dataset = BiModalEquationDataset(
-                                                    n_samples=n_train,
+                                                    n_samples=n_test,
                                                     expression=self.hparams.expression,
                                                     x1_range=self.hparams.x1_range,
                                                     x2_range=self.hparams.x2_range,
