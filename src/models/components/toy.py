@@ -82,7 +82,7 @@ class MLP(nn.Module):
         for h in hidden_dims:
             sub_layers: list[nn.Module] = []
             sub_layers.append(nn.Linear(prev_dim, h))
-            sub_layers.append(get_normalization(norm, num_features=out_dim, dimension=1))
+            sub_layers.append(get_normalization(norm, num_features=h, dimension=1))
             sub_layers.append(get_activation(activation))
             if dropout > 0:
                 sub_layers.append(nn.Dropout(dropout))
