@@ -256,8 +256,9 @@ class ModelInjectModule(LightningModule):
     ) -> None:
         # Check gradient at step
         if batch_idx == 1:
-            for bp in self.controller.breakpoints:
-                print(f"Checking {bp.name} module: {type(bp.callback)}")
+            for item in self.controller.breakpoints:
+                bp = item["breakpoint"]
+                print(f"Checking {bp.name} module on {item["position"]}: {type(bp.callback)}")
                 check_gradient(bp.callback)
 
         return super().optimizer_step(
