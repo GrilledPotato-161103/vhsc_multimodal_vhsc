@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 from torch import nn
@@ -14,6 +14,45 @@ def get_activation(name: Literal["relu", "gelu", "silu"]) -> nn.Module:
     if name == "silu":
         return nn.SiLU()
     raise ValueError(f"Unsupported activation: {name}")
+
+def get_normalization(
+    name: Optional[Literal["batch", "layer", "group"]], 
+    num_features: int,
+    dimension: Literal[1, 2, 3] = 1,
+    **kwargs
+) -> nn.Module:
+    """
+    Returns a PyTorch normalization module explicitly using a dimension argument.
+    
+    Args:
+        name: The name of the normalization layer. If None, returns nn.Identity().
+        num_features: The number of features/channels to normalize.
+        dimension: The spatial dimension of the input (1, 2, or 3). Primarily used for BatchNorm.
+        **kwargs: Extra arguments (like num_groups for GroupNorm).
+    """
+    if name is None:
+        return nn.Identity()
+        
+    if name == "batch":
+        if dimension == 1:
+            return nn.BatchNorm1d(num_features=num_features, **kwargs)
+        elif dimension == 2:
+            return nn.BatchNorm2d(num_features=num_features, **kwargs)
+        elif dimension == 3:
+            return nn.BatchNorm3d(num_features=num_features, **kwargs)
+        else:
+            raise ValueError(f"I'm completely unsure how to create a BatchNorm for dimension {dimension}.")
+            
+    if name == "layer":
+        # LayerNorm takes normalized_shape, which is usually just the feature dimension
+        return nn.LayerNorm(normalized_shape=num_features, **kwargs)
+        
+    if name == "group":
+        # GroupNorm requires 'num_groups', defaulting to 32 if not provided in kwargs
+        num_groups = kwargs.pop("num_groups", 32)
+        return nn.GroupNorm(num_groups=num_groups, num_channels=num_features, **kwargs)
+    
+    return nn.Identity()
 
 class Residual(nn.Module):
     def __init__(self, blocks: nn.Module):
@@ -32,7 +71,7 @@ class MLP(nn.Module):
         out_dim: int,
         activation: Literal["relu", "gelu", "silu"] = "gelu",
         dropout: float = 0.0,
-        use_norm: bool = False,
+        norm: str = "layer",
         residual: bool = False
     ) -> None:
         super().__init__()
@@ -43,8 +82,7 @@ class MLP(nn.Module):
         for h in hidden_dims:
             sub_layers: list[nn.Module] = []
             sub_layers.append(nn.Linear(prev_dim, h))
-            if use_norm:
-                sub_layers.append(nn.LayerNorm(h))
+            sub_layers.append(get_normalization(norm, num_features=out_dim, dimension=1))
             sub_layers.append(get_activation(activation))
             if dropout > 0:
                 sub_layers.append(nn.Dropout(dropout))
@@ -81,7 +119,7 @@ class BiModalRegressor(nn.Module):
         fusion_hidden_dims: list[int] | None = None,
         activation: Literal["relu", "gelu", "silu"] = "gelu",
         dropout: float = 0.0,
-        use_norm: bool = False,
+        norm: str = "batch",
         use_residual: bool = False
     ) -> None:
         super().__init__()
@@ -95,7 +133,7 @@ class BiModalRegressor(nn.Module):
             out_dim=latent_dim,
             activation=activation,
             dropout=dropout,
-            use_norm=use_norm,
+            norm=norm,
             residual=use_residual
         )
 
@@ -105,7 +143,7 @@ class BiModalRegressor(nn.Module):
             out_dim=latent_dim,
             activation=activation,
             dropout=dropout,
-            use_norm=use_norm,
+            norm=norm,
             residual=use_residual
         )
 
@@ -117,7 +155,7 @@ class BiModalRegressor(nn.Module):
             out_dim=1,
             activation=activation,
             dropout=dropout,
-            use_norm=use_norm,
+            norm=norm,
             residual=use_residual
         )
 

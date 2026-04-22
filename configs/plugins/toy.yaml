@@ -12,7 +12,7 @@ breakpoints:
         d_2: 16
         hidden_dim: 24
         activation: silu
-        norm: layernorm
+        norm: layer
         dropout: 0.5
         order: adn
         concat: true
@@ -33,6 +33,7 @@ breakpoints:
         hidden_dims: [8, 8, 4]
         per_dim_uncertainty: False
         dropout: 0.3
+        norm: batch
         activation: silu
       mutate: false
       valid: true

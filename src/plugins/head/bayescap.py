@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
-from src.models.components.toy import MLP, Residual
+from src.models.components.toy import MLP, Residual, get_normalization
 from src.plugins.var import BreakpointContext, BreakpointOutput
 
 # -----------------------------
@@ -36,6 +36,7 @@ class BayesCap1D(nn.Module):
         dropout: float = 0.0,
         activation: str = "gelu",
         per_dim_uncertainty: bool = True,
+        norm: str = "batch",
         eps: float = 1e-6,
     ) -> None:
         super().__init__()
@@ -71,7 +72,7 @@ class BayesCap1D(nn.Module):
                                 hidden_dims=hidden_dims,
                                 out_dim=hidden_dim,
                                 activation=activation,
-                                use_norm = True,
+                                norm = norm,
                                 residual= True,
                                 dropout=dropout
                                 )
@@ -79,26 +80,29 @@ class BayesCap1D(nn.Module):
             self.blocks = nn.Identity()
         
 
-        self.mu_head = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            act(),
-            nn.Linear(hidden_dim, input_dim),
-        )
+        self.mu_head = MLP(in_dim= hidden_dim,
+                           hidden_dims=[hidden_dim],
+                           out_dim=input_dim,
+                           activation=activation,
+                           norm=norm,
+                           residual= False,
+                           dropout=dropout)
 
-        self.alpha_head = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            act(),
-            nn.Linear(hidden_dim, self.uncertainty_dim),
-        )
+        self.alpha_head = MLP(in_dim= hidden_dim,
+                           hidden_dims=[hidden_dim],
+                           out_dim=self.uncertainty_dim,
+                           activation=activation,
+                           norm=norm,
+                           residual= False,
+                           dropout=dropout)
 
-        self.beta_head = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            act(),
-            nn.Linear(hidden_dim, self.uncertainty_dim),
-        )
+        self.beta_head = MLP(in_dim= hidden_dim,
+                           hidden_dims=[hidden_dim],
+                           out_dim=self.uncertainty_dim,
+                           activation=activation,
+                           norm=norm,
+                           residual= False,
+                           dropout=dropout)
 
         self._reset_parameters()
 
