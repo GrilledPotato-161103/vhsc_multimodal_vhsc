@@ -71,6 +71,10 @@ class ModelInjectModule(LightningModule):
         self.val_recon_loss = MeanMetric()
         self.test_recon_loss = MeanMetric()
 
+        self.train_unc_loss = MeanMetric()
+        self.val_unc_loss = MeanMetric()
+        self.test_unc_loss = MeanMetric()
+
         self.train_id = MeanMetric()
         self.val_id = MeanMetric()
         self.test_id = MeanMetric()
@@ -207,14 +211,20 @@ class ModelInjectModule(LightningModule):
                  on_step=True, 
                  on_epoch=True, 
                  prog_bar=True)
-
-        self.train_recon_loss(recon["loss"].mean())
+        
+        self.train_recon_loss(recon["recon_loss"].mean())
         self.log(f"train/loss_recon_{signal_str}", 
                     self.train_recon_loss, 
                     on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
+        self.train_unc_loss(recon["unc_loss"].mean())
+        self.log(f"train/loss_unc_{signal_str}", 
+                    self.train_unc_loss, 
+                    on_step=True, 
+                    on_epoch=True, 
+                    prog_bar=True)
         
         self.train_id(unc["identity"].mean())
         self.log(f"train/loss_id_{signal_str}", 
@@ -234,8 +244,8 @@ class ModelInjectModule(LightningModule):
         if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2: 
             unc["loss"] *= 0
 
-        # return loss or backpropagation will fail
-        return loss.mean() + recon["loss"].mean() + unc["loss"].mean()
+        # return loss or backpropagation will fail, focus on uncertainty loss only
+        return loss.mean() + recon["unc_loss"].mean() + unc["loss"].mean()
     
     def optimizer_step(
         self,
@@ -253,7 +263,7 @@ class ModelInjectModule(LightningModule):
             for bp in self.controller.breakpoints:
                 print(f"Checking {bp.name} module: {type(bp.callback)}")
                 check_gradient(bp.callback)
-                
+
         optimizer.step(closure=optimizer_closure)
         
 
@@ -281,9 +291,16 @@ class ModelInjectModule(LightningModule):
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.val_recon_loss(recon["loss"].mean())
+        self.val_recon_loss(recon["recon_loss"].mean())
         self.log(f"val/loss_recon_{signal_str}", 
                     self.val_recon_loss, 
+                    on_step=True, 
+                    on_epoch=True, 
+                    prog_bar=True)
+        
+        self.val_unc_loss(recon["unc_loss"].mean())
+        self.log(f"val/loss_unc_{signal_str}", 
+                    self.val_unc_loss, 
                     on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
@@ -389,10 +406,17 @@ class ModelInjectModule(LightningModule):
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.test_recon_loss(recon["loss"].mean())
+        self.test_recon_loss(recon["recon_loss"].mean())
         self.log(f"train/loss_recon_{signal_str}", 
                     self.test_recon_loss, 
                     on_step=False, 
+                    on_epoch=True, 
+                    prog_bar=True)
+        
+        self.test_unc_loss(recon["unc_loss"].mean())
+        self.log(f"test/loss_unc_{signal_str}", 
+                    self.test_unc_loss, 
+                    on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
