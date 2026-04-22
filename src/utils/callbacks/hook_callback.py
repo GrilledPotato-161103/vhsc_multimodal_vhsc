@@ -24,8 +24,7 @@ def pearson_correlation(x: torch.Tensor, y: torch.Tensor):
     
     # Tính mẫu số (Tích độ lệch chuẩn)
     # Thêm 1e-8 vào mẫu số để tránh lỗi chia cho 0 (Numerical stability)
-    denominator = torch.sqrt(torch.sum(xm ** 2) * torch.sum(ym ** 2)) + 1e-8
-    
+    denominator = torch.sqrt(torch.sum(xm ** 2) * torch.sum(ym ** 2)) + 1e-6
     return numerator / denominator
 
 class AdversarialVizCallback(pl.Callback):
@@ -44,7 +43,7 @@ class AdversarialVizCallback(pl.Callback):
         self.variances = []
     
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        print(f"DEBUG: Batch {batch_idx} ended.")
+        # print(f"DEBUG: Batch {batch_idx} ended.")
         # Lấy jump distance để tính loga của loss gain
         bp_signal = outputs["bp_signal"]
         # for key in outputs: 
@@ -170,7 +169,6 @@ class AdversarialVizCallback(pl.Callback):
         # Đảm bảo trainer đang xài WandbLogger
 
         if "WandbLogger" in str(type(trainer.logger)):
-            print("Is Wandb logger")
             wandb_logger = trainer.logger.experiment
             log_dict = {
                 name: wandb.Plotly(fig) for name, fig in figs_to_log.items()

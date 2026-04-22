@@ -19,6 +19,16 @@ from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
 import functools
 torch.serialization.add_safe_globals([functools.partial])
 
+def check_gradient(model):
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if param.grad is not None:
+                # Get a summary metric to avoid console flooding
+                grad_norm = param.grad.norm().item()
+                print(f"Layer: {name: <30} | Gradient Norm: {grad_norm:.6f}")
+            else:
+                print(f"Layer: {name: <30} | Gradient: NONE")
+
 class HuberLoss(nn.Module):
     def __init__(self, threshold=0.5):
         super().__init__()
@@ -157,22 +167,24 @@ class ModelInjectModule(LightningModule):
         devs = recon_trace.trace["dev"]
         dists = recon_trace.trace["distance"]
         recon_loss = 0
+        unc_loss = 0
         for sig, rec, src, dev, dist in zip(sigs, recs, srcs[::-1], devs, dists): 
             if sig == 0: 
                 continue
-            recon_loss += self.recon_criterion(rec, src) + self.recon_criterion(dev, dist) 
-        
+            recon_loss += self.recon_criterion(rec, src)
+            unc_loss += self.criterion(dev, dist) 
+
         unc_trace = Breakpoint.get_by_name(self.hparams.unc_bp).trace
         
         (mu, alpha, beta) = unc_trace.trace["output"]
         variance = bayescap_variance_1d(alpha, beta, target_dim=1, eps=1e-6)
         unc_loss = self.unc_criterion(mu, alpha, beta, logits, y)
-
-        return loss, logits, y, {"loss": recon_loss, "trace": recon_trace}, {"mu": mu, 
-                                                                             "var": variance, 
-                                                                             "loss": unc_loss["loss"], 
-                                                                             "identity": unc_loss["identity_loss"],
-                                                                             "nll": unc_loss["nll_loss"]}
+        return loss, logits, y, {"recon_loss": recon_loss, "unc_loss": unc_loss, "trace": recon_trace}, {"mu": mu, 
+                                                                                                        "var": variance, 
+                                                                                                        "loss": unc_loss["loss"], 
+                                                                                                        "identity": unc_loss["identity_loss"],
+                                                                                                        "nll": unc_loss["nll_loss"]}
+    
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -224,6 +236,26 @@ class ModelInjectModule(LightningModule):
 
         # return loss or backpropagation will fail
         return loss.mean() + recon["loss"].mean() + unc["loss"].mean()
+    
+    def optimizer_step(
+        self,
+        epoch,
+        batch_idx,
+        optimizer,
+        optimizer_idx,
+        optimizer_closure,
+        on_tpu,
+        using_native_amp,
+        using_lbfgs,
+    ) -> None:
+        # Check gradient at step
+        if batch_idx == 1:
+            for bp in self.controller.breakpoints:
+                print(f"Checking {bp.name} module: {type(bp.callback)}")
+                check_gradient(bp.callback)
+                
+        optimizer.step(closure=optimizer_closure)
+        
 
     def on_validation_start(self) -> None:
         self.controller.eval()
