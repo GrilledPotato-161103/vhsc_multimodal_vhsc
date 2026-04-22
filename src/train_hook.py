@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
-
+import os
 import hydra
 import lightning as L
 import rootutils
@@ -9,7 +9,6 @@ from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
 from src.plugins.hook import BreakpointController, Breakpoint
 # ------------------------------------------------------------------------------------ #
 # the setup_root above is equivalent to:
@@ -39,7 +38,7 @@ from src.utils import (
 )
 
 log = RankedLogger(__name__, rank_zero_only=True)
-
+os.environ["WANDB_CONSOLE"] = "off"
 
 @task_wrapper
 def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
