@@ -171,19 +171,19 @@ class ModelInjectModule(LightningModule):
         devs = recon_trace.trace["dev"]
         dists = recon_trace.trace["distance"]
         recon_loss = 0
-        unc_loss = 0
+        recon_unc_loss = 0
         for sig, rec, src, dev, dist in zip(sigs, recs, srcs[::-1], devs, dists): 
             if sig == 0: 
                 continue
             recon_loss += self.recon_criterion(rec, src)
-            unc_loss += self.criterion(dev, dist) 
+            recon_unc_loss += self.criterion(dev, dist) 
 
         unc_trace = Breakpoint.get_by_name(self.hparams.unc_bp).trace
         
         (mu, alpha, beta) = unc_trace.trace["output"]
         variance = bayescap_variance_1d(alpha, beta, target_dim=1, eps=1e-6)
         unc_loss = self.unc_criterion(mu, alpha, beta, logits, y)
-        return loss, logits, y, {"recon_loss": recon_loss, "unc_loss": unc_loss, "trace": recon_trace}, {"mu": mu, 
+        return loss, logits, y, {"recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace}, {"mu": mu, 
                                                                                                         "var": variance, 
                                                                                                         "loss": unc_loss["loss"], 
                                                                                                         "identity": unc_loss["identity_loss"],
