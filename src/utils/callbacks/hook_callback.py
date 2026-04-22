@@ -95,7 +95,7 @@ class AdversarialVizCallback(pl.Callback):
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
         directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)
         # B*, N, 1
-        intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten()
+        intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten() * 20
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
         variances = torch.concatenate(self.variances, dim=0).cpu().numpy().flatten()
         x, y = positions[..., 0].flatten(), positions[..., 1].flatten()
