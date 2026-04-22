@@ -252,11 +252,7 @@ class ModelInjectModule(LightningModule):
         epoch,
         batch_idx,
         optimizer,
-        optimizer_idx,
         optimizer_closure,
-        on_tpu,
-        using_native_amp,
-        using_lbfgs,
     ) -> None:
         # Check gradient at step
         if batch_idx == 1:
@@ -264,7 +260,12 @@ class ModelInjectModule(LightningModule):
                 print(f"Checking {bp.name} module: {type(bp.callback)}")
                 check_gradient(bp.callback)
 
-        optimizer.step(closure=optimizer_closure)
+        return super().optimizer_step(
+                                        epoch,
+                                        batch_idx,
+                                        optimizer,
+                                        optimizer_closure,
+                                    )
         
 
     def on_validation_start(self) -> None:
