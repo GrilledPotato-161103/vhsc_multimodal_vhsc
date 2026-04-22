@@ -28,6 +28,8 @@ def check_gradient(model):
                 print(f"Layer: {name: <30} | Gradient Norm: {grad_norm:.6f}")
             else:
                 print(f"Layer: {name: <30} | Gradient: NONE")
+        else:
+            print(f"Layer: {name: <30} | Gradient: NOT SET")
 
 class HuberLoss(nn.Module):
     def __init__(self, threshold=0.5):
