@@ -172,7 +172,7 @@ class ModelInjectModule(LightningModule):
         dists = recon_trace.trace["distance"]
         recon_loss = 0
         recon_unc_loss = 0
-        for sig, rec, src, dev, dist in zip(sigs, recs, srcs[::-1], devs, dists): 
+        for sig, rec, src, dev, dist in zip(sigs, recs, srcs, devs, dists): 
             if sig == 0: 
                 continue
             recon_loss += self.recon_criterion(rec, src)
