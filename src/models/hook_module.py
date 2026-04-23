@@ -44,13 +44,13 @@ class HuberLoss(nn.Module):
             return (self.threshold * (l1_norm - self.threshold)).mean()
 
 class ModelInjectModule(LightningModule):
-    def __init__(self, 
+    def __init__(self,
                  net: nn.Module,
                  recon_bp: str,
                  unc_bp: str,
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
-                 expression: str | None = None, 
+                 expression: str | None = None,
                  controller: BreakpointController | None = None,
                  compile: bool = False,
                  recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
@@ -58,7 +58,9 @@ class ModelInjectModule(LightningModule):
                  epoch_phase: int = 20,
                  mask_rate: float = 0.3,
                  eta: float = 0.05,
-                 n_jumps: int = 8
+                 n_jumps: int = 8,
+                 ekf_enabled: bool = False,
+                 sigma_z_mode: str = "mc",
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller"])
@@ -90,6 +92,16 @@ class ModelInjectModule(LightningModule):
         self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
+
+        self.ekf_enabled = ekf_enabled
+        if ekf_enabled:
+            from plugins.sigma_z import GroundTruthSigmaZ
+            from plugins.head.ekf_nll_loss import EKFGGDNLLLoss
+            enc1 = self.net.net.x1_encoder
+            enc2 = self.net.net.x2_encoder
+            sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode)
+            self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
+            self.ekf_loss = EKFGGDNLLLoss(eps=1e-8)
     
 
     def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
@@ -243,11 +255,32 @@ class ModelInjectModule(LightningModule):
                 prog_bar=True)
         
         # Phase 1: Not propagating uncertainty of deficit inputs
-        if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2: 
+        if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2:
             unc["loss"] *= 0
 
+        ekf_nll = torch.tensor(0.0, device=self.device)
+        if self.ekf_enabled:
+            from plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
+            from plugins.hook import Breakpoint
+            with torch.no_grad():
+                z1 = self.net.net.x1_encoder(x1)
+                z2 = self.net.net.x2_encoder(x2)
+            z = torch.cat([z1, z2], dim=-1).detach()  # (B, 32)
+            recon_bp_obj = Breakpoint.get_by_name(self.hparams.recon_bp)
+            reconstructor = recon_bp_obj.callback
+            recon_fn = make_reconstructor_fn(reconstructor, tuple(bp_signal))
+            pred_fn = make_predictor_fn(self.net.net.head)
+            sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
+                z=z, diag_sigma_z=self.diag_sigma_z,
+                reconstructor_fn=recon_fn, predictor_fn=pred_fn
+            )
+            ekf_nll = self.ekf_loss(y_true=y, mu_pred=logits, sigma_pred_sq=sigma_pred_sq)
+            self.log("train/ekf_nll", ekf_nll, on_step=True, on_epoch=True, prog_bar=False)
+            self.log("train/sigma_pred_mean", sigma_pred_sq.mean(), on_step=True, on_epoch=True, prog_bar=False)
+            self.log("train/beta", torch.exp(self.ekf_loss.log_beta), on_step=True, on_epoch=True, prog_bar=False)
+
         # return loss or backpropagation will fail, focus on uncertainty loss only
-        return loss.mean() + recon["unc_loss"].mean() + unc["loss"].mean()
+        return loss.mean() + recon["unc_loss"].mean() + unc["loss"].mean() + ekf_nll
     
     def optimizer_step(
         self,
@@ -474,6 +507,8 @@ class ModelInjectModule(LightningModule):
             bp = item["breakpoint"]
             print(f"Assigning {bp.name} breakpoints to Optimizer for update")
             parameters = parameters + list(bp.callback.parameters())
+        if self.ekf_enabled:
+            parameters = parameters + list(self.ekf_loss.parameters())
 
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:

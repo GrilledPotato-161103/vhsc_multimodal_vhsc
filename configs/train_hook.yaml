@@ -62,3 +62,7 @@ ckpt_path: null
 
 # seed for random number generators in pytorch, numpy and python.random
 seed: null
+
+model:
+  sigma_z_mode: ${plugins.sigma_z.mode}
+  ekf_enabled: ${plugins.ekf.enabled}
