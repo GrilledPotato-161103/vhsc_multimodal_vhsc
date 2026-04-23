@@ -469,11 +469,11 @@ class ModelInjectModule(LightningModule):
         :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
         """
 
-        parameters = self.trainer.model.parameters()
+        parameters = list(self.trainer.model.parameters())
         for item in self.controller.breakpoints:
             bp = item["breakpoint"]
             print(f"Assigning {bp.name} breakpoints to Optimizer for update")
-            parameters = parameters + bp.callback.parameters()
+            parameters = parameters + list(bp.callback.parameters())
 
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
