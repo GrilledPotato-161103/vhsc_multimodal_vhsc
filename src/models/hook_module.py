@@ -471,8 +471,9 @@ class ModelInjectModule(LightningModule):
 
         parameters = self.trainer.model.parameters()
         for item in self.controller.breakpoints:
-            print(f"Assigning {item['name']} breakpoints to Optimizer for update")
-            parameters = parameters + item["breakpoint"].callback.parameters()
+            bp = item["breakpoint"]
+            print(f"Assigning {bp.name} breakpoints to Optimizer for update")
+            parameters = parameters + bp.callback.parameters()
 
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
