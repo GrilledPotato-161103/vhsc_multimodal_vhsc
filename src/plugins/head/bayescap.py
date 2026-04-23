@@ -239,10 +239,10 @@ class BayesCap1DLoss(nn.Module):
             scaled = (abs_err / alpha).clamp(
                 min=self.resi_min, max=self.resi_max
             )
+
             nll = (
                 torch.pow(scaled, beta)
-                + torch.log(alpha)
-                - torch.log(beta)
+                - torch.log(beta / alpha)
                 + torch.lgamma(1.0 / beta)
             )
         else:
@@ -252,9 +252,8 @@ class BayesCap1DLoss(nn.Module):
             )
             nll = (
                 scaled
-                + torch.log(alpha)
                 + torch.lgamma(1.0 / beta)
-                - torch.log(beta)
+                - torch.log(beta / alpha)
             )
 
         return self._reduce(nll)

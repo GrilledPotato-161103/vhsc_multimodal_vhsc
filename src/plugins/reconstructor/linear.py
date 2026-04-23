@@ -77,8 +77,6 @@ class BilinearReconstructor(nn.Module):
 
         return cls
     
-
-
 class LinearReconstructor(nn.Module):
     counter = 0
     def __init__(self, 
