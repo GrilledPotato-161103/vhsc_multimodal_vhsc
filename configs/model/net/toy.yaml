@@ -7,5 +7,5 @@ latent_dim: 16
 fusion_hidden_dims: [32, 16, 16]
 activation: silu
 dropout: 0.3
-use_norm: true
+norm: batch
 use_residual: true
