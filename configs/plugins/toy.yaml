@@ -40,3 +40,22 @@ breakpoints:
     pos: after
 
 
+# === EKF Experiment Configuration ===
+
+sigma_z:
+  mode: "mc"                    # "mc" | "jacobian"
+  n_mc: 5000
+  x_range_train: [-1.0, 1.0]
+  x_range_ood: [-0.8, 1.2]
+
+ekf:
+  enabled: true
+  jacobian_mode: "autograd"
+  diagonal: true
+  sigma_net_recon: 0.0
+  sigma_net_pred: 0.0
+
+nll:
+  learn_calibration: false
+  beta_init: 0.5
+  eps: 1.0e-8
