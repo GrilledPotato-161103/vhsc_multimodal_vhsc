@@ -46,7 +46,7 @@ sigma_z:
   mode: "mc"                    # "mc" | "jacobian"
   n_mc: 5000
   x_range_train: [-1.0, 1.0]
-  x_range_ood: [-0.8, 1.2]
+  x_range_ood: [-0.6, 1.4]
 
 ekf:
   enabled: true
