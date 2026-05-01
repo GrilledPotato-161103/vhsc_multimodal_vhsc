@@ -283,8 +283,8 @@ class ModelEKFInjectModule(LightningModule):
         optimizer,
         optimizer_closure,
     ) -> None:
-
-        if batch_idx == 1:
+        # Only check once
+        if batch_idx == 1 and self.current_epoch == 0:
             # Check gradient at step
             print(f"Checking gradient for frozen model {self.net.__class__.__qualname__}")
             check_gradient(self.net)
