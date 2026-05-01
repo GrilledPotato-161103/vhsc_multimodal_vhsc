@@ -1,5 +1,5 @@
 # @package _global_
-
+expression: "((x1**2 - x2**2) / (torch.abs(x1) + torch.abs(x2) + 0.1)) * torch.abs(1 - torch.sqrt(x1**2 + x2**2))"
 # specify here default configuration
 # order of defaults determines the order in which configs override each other
 defaults:
