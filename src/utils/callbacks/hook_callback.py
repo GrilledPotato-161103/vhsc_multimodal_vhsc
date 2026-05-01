@@ -9,6 +9,9 @@ from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
+import seaborn as sns
+from matplotlib import pyplot as plt
+from matplotlib.axes import Axes
 
 def pearson_correlation(x: torch.Tensor, y: torch.Tensor):
     # Tính giá trị trung bình
@@ -89,7 +92,7 @@ class AdversarialVizCallback(pl.Callback):
         return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        print("Valid epoch end called", len(self.losses))
+        # print("Valid epoch end called", len(self.losses))
         if len(self.losses) <= 1:
             return super().on_validation_epoch_end(trainer, pl_module)
         # B*, N, 2
@@ -100,17 +103,22 @@ class AdversarialVizCallback(pl.Callback):
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
         variances = torch.concatenate(self.variances, dim=0).cpu().numpy().flatten()
         x, y = positions[..., 0].flatten(), positions[..., 1].flatten()
-        grid_x, grid_y = np.mgrid[:self.grid_size, :self.grid_size]
+        # mini, maxi = min(x.min(), y.min()), max(x.max(), y.max())
+        # x = np.interp(x, (mini, maxi), (0, self.grid_size))
+        # y = np.interp(y, (mini, maxi), (0, self.grid_size))
+        grid_x, grid_y = np.mgrid[-2:2:complex(0, self.grid_size), -2:2:complex(0, self.grid_size)]
 
         # Hàm nội suy từ điểm phân tán lên lưới
         def rasterize(values):
             # Nội suy tuyến tính
-            grid = griddata((x, y), values.flatten(), (grid_x, grid_y), method='linear')
+            grid = griddata((x, y), values.flatten(), (grid_x, grid_y), method='linear', rescale=True)
             # Xử lý các điểm NaN (ngoài rìa) bằng nearest neighbor
-            nan_mask = np.isnan(grid)
+            nan_mask = np.isnan(grid) | np.isinf(grid) | (grid == 0)
             if np.any(nan_mask):
-                grid_nearest = griddata((x, y), values.flatten(), (grid_x, grid_y), method='nearest')
+                grid_nearest = griddata((x, y), values.flatten(), (grid_x, grid_y), method='nearest', rescale=True)
                 grid[nan_mask] = grid_nearest[nan_mask]
+            
+            print(grid.max(), grid.min(), grid.shape)
             return grid
         # 3. Tính toán và Rasterize
         # Tính vector U, V
@@ -122,7 +130,11 @@ class AdversarialVizCallback(pl.Callback):
         
         # Nội suy Loss và Variance
         loss_grid = rasterize(losses)
+        loss_grid = np.clip(loss_grid, 0, 20)
+
         var_grid = rasterize(variances)
+        var_grid = np.clip(var_grid, 0, 20)
+        var_grid[np.isinf(var_grid)] = 20
 
         # 4. Làm mịn và tính Covariance (Local Covariance)
         # E[L], E[V], E[L*V] thông qua Gaussian filter
@@ -132,39 +144,46 @@ class AdversarialVizCallback(pl.Callback):
         
         # Cov(L, V) = E[LV] - E[L]E[V]
         cov_grid = loss_var_smooth - (loss_smooth * var_smooth)
-
         # 5. Vẽ Plotly Charts
         figs_to_log = {}
 
         # --- A. Quiver Plot (Trường Vector) ---
         # Lấy mẫu thưa hơn để biểu đồ không bị rối mịt mù
         slice_idx = (slice(None, None, 2), slice(None, None, 2))
-        fig_quiver = ff.create_quiver(
-            grid_x[slice_idx], grid_y[slice_idx], 
-            u_grid[slice_idx], v_grid[slice_idx],
-            scale=0.05, arrow_scale=0.3, name='Gradient Vector'
-        )
-        fig_quiver.update_layout(title="Rasterized Vector Field", width=700, height=700)
-        figs_to_log["Validation/Vector_Field"] = fig_quiver
-
         # Hàm tiện ích vẽ Heatmap
-        def create_heatmap(z_data, title, colorscale='Viridis'):
-            fig = go.Figure(data=go.Heatmap(
-                z=z_data, x=grid_x[0, :], y=grid_y[:, 0],
-                colorscale=colorscale
-            ))
-            fig.update_layout(title=title, width=700, height=700)
+        def create_heatmap(z_data, colorscale='viridis', ax = None):
+            if isinstance(ax, Axes): 
+                sns.heatmap(z_data, ax=ax, cmap=colorscale,
+                              cbar=False)
+                return 
+            fig, ax = plt.subplots(figsize=(8, 8))
+            sns.heatmap(z_data, ax=ax, cmap=colorscale,
+                              cbar=False)
+            fig.colorbar(ax.collections[0], ax=ax, label="Value")
             return fig
 
         # --- B. Loss Map ---
-        figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, "Smoothed Loss Map", 'Inferno')
+        figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
 
         # --- C. Variance Map ---
-        figs_to_log["val/Variance_Map"] = create_heatmap(var_smooth, "Smoothed Variance Map", 'Plasma')
+        figs_to_log["val/Variance_Map"] = create_heatmap(var_smooth, 'plasma')
 
         # --- D. Covariance Map ---
         # Dùng màu có tính đối xứng (RdBu) vì covariance có thể âm hoặc dương
-        figs_to_log["val/Covariance_Map"] = create_heatmap(cov_grid, "Local Covariance (Loss vs Variance)", 'RdBu_r')
+        figs_to_log["val/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r')
+
+        fig_quiver, ax = plt.subplots(figsize=(8, 8))
+        create_heatmap(cov_grid, 'viridis', ax=ax)
+        fig_quiver.colorbar(ax.collections[0], ax=ax, label="Value")
+        q = ax.quiver(
+            (grid_x[slice_idx] + 2) / 2 * self.grid_size, (grid_y[slice_idx] + 2) / 2 * self.grid_size, 
+            u_grid[slice_idx], v_grid[slice_idx],
+            color='r',
+            label="Adversarial vectors"
+        )
+        ax.set_title("Adversarial test")
+        
+        figs_to_log["val/Vector_Field"] = fig_quiver
 
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger
@@ -172,7 +191,7 @@ class AdversarialVizCallback(pl.Callback):
         if "WandbLogger" in str(type(trainer.logger)):
             wandb_logger = trainer.logger.experiment
             log_dict = {
-                name: wandb.Plotly(fig) for name, fig in figs_to_log.items()
+                name: wandb.Image(fig) for name, fig in figs_to_log.items()
             }
             log_dict["global_step"] = trainer.global_step
             log_dict["epoch"] = trainer.current_epoch

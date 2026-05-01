@@ -1,7 +1,7 @@
 _target_: src.models.hook_ekf_module.ModelEKFInjectModule
 _partial_: True
 
-expression: ${data.expression}
+expression: ${expression}
 
 recon_bp: reconstructor.0
 unc_bp: uncertainty.0

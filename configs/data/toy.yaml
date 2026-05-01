@@ -1,6 +1,6 @@
 _target_: src.data.toy_datamodule.ToyBiModalDataModule
 
-expression: "(x1**2 + 2*x1*x2 + torch.sin(x2)*x2)/4"
+expression: ${expression}
 n_samples: 128000
 batch_size: 128
 num_workers: 12
