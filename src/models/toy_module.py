@@ -86,7 +86,7 @@ class BiModalLightningModule(LightningModule):
         batch: Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         (x1, x2), y = batch
-        y_hat = self.forward(x1, x2)
+        y_hat = self.forward(x1.unsqueeze(-1), x2.unsqueeze(-1))
 
         if y_hat.ndim == 2 and y_hat.shape[-1] == 1:
             y_hat = y_hat.squeeze(-1)
