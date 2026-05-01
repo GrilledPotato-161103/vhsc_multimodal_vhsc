@@ -43,14 +43,14 @@ class HuberLoss(nn.Module):
         else:
             return (self.threshold * (l1_norm - self.threshold)).mean()
 
-class ModelInjectModule(LightningModule):
-    def __init__(self, 
+class ModelEKFInjectModule(LightningModule):
+    def __init__(self,
                  net: nn.Module,
                  recon_bp: str,
                  unc_bp: str,
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
-                 expression: str | None = None, 
+                 expression: str | None = None,
                  controller: BreakpointController | None = None,
                  compile: bool = False,
                  recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
@@ -58,12 +58,16 @@ class ModelInjectModule(LightningModule):
                  epoch_phase: int = 20,
                  mask_rate: float = 0.3,
                  eta: float = 0.05,
-                 n_jumps: int = 8
+                 n_jumps: int = 8,
+                 ekf_enabled: bool = False,
+                 sigma_z_mode: str = "mc",
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller"])
         self.net = net
         self.controller = controller
+        self.recon_bp = Breakpoint.get_by_name(recon_bp)
+        self.unc_bp = Breakpoint.get_by_name(unc_bp)
         
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
@@ -90,8 +94,16 @@ class ModelInjectModule(LightningModule):
         self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
-    
 
+        if ekf_enabled:
+            from plugins.sigma_z import GroundTruthSigmaZ
+            from plugins.head.ekf_nll_loss import EKFGGDNLLLoss
+            enc1 = self.net.x1_encoder
+            enc2 = self.net.x2_encoder
+            sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
+            self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
+            self.ekf_loss = EKFGGDNLLLoss(eps=1e-8)
+    
     def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
         """
         Evaluate expression like:
@@ -145,28 +157,28 @@ class ModelInjectModule(LightningModule):
         # Include bp_kwargs in Dataset for breakpoint manipulation
         self.net.eval()
         self.net.requires_grad_(False)
+
         (x1, x2), y = batch
-        x1 = x1.cuda()
-        x2 = x2.cuda()
+        x1 = x1.cuda().unsqueeze(1)
+        x2 = x2.cuda().unsqueeze(1)
         y = y.cuda().unsqueeze(1)
 
         # Set kwargs for breakpoints, use cache if available
         if "bp_signal" in kwargs.keys():
             bp_signal = kwargs["bp_signal"]
         else:
-            mask_index = np.random.choice(3, 1, p=(1 - self.hparams.mask_rate, 
+            mask_index = np.random.choice(3, 1, p= (1 - self.hparams.mask_rate, 
                                                 self.hparams.mask_rate / 2,
                                                 self.hparams.mask_rate / 2))[0]
             bp_signal = [1, 1]
             if mask_index > 0: 
                 bp_signal[mask_index - 1] = 0
         
-        recon_bp = Breakpoint.get_by_name(self.hparams.recon_bp)
-        recon_bp.kwargs = tuple(bp_signal)
+        self.recon_bp.kwargs = tuple(bp_signal)
         # print(recon_bp.kwargs)
         logits = self.forward((x1, x2)).unsqueeze(1)
         loss = self.criterion(logits, y)
-        recon_trace = recon_bp.trace
+        recon_trace = self.recon_bp.trace
         sigs = recon_trace.trace["signal"]
         recs = recon_trace.trace["reconstructed"]
         srcs = recon_trace.trace["input"]
@@ -178,25 +190,22 @@ class ModelInjectModule(LightningModule):
             if sig == 0: 
                 continue
             recon_loss += self.recon_criterion(rec, src)
-            recon_unc_loss += self.criterion(dev, dist) 
+            recon_unc_loss += self.criterion(dev, dist)
 
-        unc_trace = Breakpoint.get_by_name(self.hparams.unc_bp).trace
+        unc_trace = self.unc_bp.trace
         
         (mu, alpha, beta) = unc_trace.trace["output"]
         variance = bayescap_variance_1d(alpha, beta, target_dim=1, eps=1e-6)
         unc_loss = self.unc_criterion(mu, alpha, beta, logits, y)
-        return loss, logits, y, {"recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace}, {"mu": mu, 
-                                                                                                        "var": variance, 
-                                                                                                        "loss": unc_loss["loss"], 
-                                                                                                        "identity": unc_loss["identity_loss"],
-                                                                                                        "nll": unc_loss["nll_loss"]}
-    
+
+        return loss, logits, y, \
+                {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace}, \
+                {"mu": mu, "var": variance, "loss": unc_loss["loss"], "identity": unc_loss["identity_loss"], "nll": unc_loss["nll_loss"]}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
     ) -> torch.Tensor:
         """Perform a single training step on a batch of data from the training set.
-
         :param batch: A batch of data (a tuple) containing the input tensor of images and target
             labels.
         :param batch_idx: The index of the current batch.
@@ -243,11 +252,29 @@ class ModelInjectModule(LightningModule):
                 prog_bar=True)
         
         # Phase 1: Not propagating uncertainty of deficit inputs
-        if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2: 
+        if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2:
             unc["loss"] *= 0
+        
+        srcs = recon["srcs"]
+        ekf_nll = torch.tensor(0.0, device=self.device)
+        if self.hparams.ekf_enabled and all(param.requires_grad for param in self.recon_bp.callback.parameters()):
+            from plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
+            z = torch.cat(srcs, dim=-1).detach()  # (B, 32)
+            reconstructor = self.recon_bp.callback
+            recon_fn = make_reconstructor_fn(reconstructor, tuple(signal))
+            pred_fn = make_predictor_fn(self.net.head)
+            sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
+                z=z, diag_sigma_z=self.diag_sigma_z,
+                reconstructor_fn=recon_fn, predictor_fn=pred_fn
+            )
+            ekf_nll = self.ekf_loss(y_true=y, mu_pred=logits, sigma_pred_sq=sigma_pred_sq)
 
+            self.log("train/ekf_nll", ekf_nll, on_step=True, on_epoch=True, prog_bar=True)
+            self.log("train/sigma_pred_mean", sigma_pred_sq.mean(), on_step=True, on_epoch=True, prog_bar=True)
+            self.log("train/beta", torch.exp(self.ekf_loss.log_beta), on_step=True, on_epoch=True, prog_bar=False)
         # return loss or backpropagation will fail, focus on uncertainty loss only
-        return loss.mean() + recon["unc_loss"].mean() + unc["loss"].mean()
+
+        return loss.mean() + recon["unc_loss"].mean() + unc["loss"].mean() + ekf_nll
     
     def optimizer_step(
         self,
@@ -468,11 +495,13 @@ class ModelInjectModule(LightningModule):
         :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
         """
 
-        parameters = list(self.trainer.model.parameters())
+        parameters = []
         for item in self.controller.breakpoints:
             bp = item["breakpoint"]
             print(f"Assigning {bp.name} breakpoints to Optimizer for update")
             parameters = parameters + list(bp.callback.parameters())
+        if self.hparams.ekf_enabled:
+            parameters = parameters + list(self.ekf_loss.parameters())
 
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
@@ -499,7 +528,6 @@ if __name__ == "__main__":
         plugin_cfg = cfg.plugins
         print("Initializing model")
         model = torch.load(plugin_cfg.model_checkpoint, weights_only=False).cuda()
-        model.requires_grad_(False)
         datamodule = instantiate(cfg.data)
         # print(type(datamodule)
         datamodule.setup()

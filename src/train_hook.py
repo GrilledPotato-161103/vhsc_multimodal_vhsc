@@ -60,7 +60,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
     net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).cuda()
-    net.requires_grad_(False)
+    net.requires_grad_(True)
     controller = BreakpointController.__init_dict__(net, cfg.plugins)
     controller.cuda()
     print(list(Breakpoint.list_of_breakpoints.keys()))
@@ -112,7 +112,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return metric_dict, object_dict
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="train_hook.yaml")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="train_ekf_hook.yaml")
 def main(cfg: DictConfig) -> Optional[float]:
     """Main entry point for training.
 

@@ -73,7 +73,7 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log_hyperparameters(object_dict)
 
     log.info("Starting testing!")
-    net = torch.load(r"data/toy.pth", weights_only=False)
+    net = torch.load(r"data/checkpoints/toy.pth", weights_only=False)
     model.net = net
     trainer.test(model=model, datamodule=datamodule, ckpt_path=None, weights_only=False)
 

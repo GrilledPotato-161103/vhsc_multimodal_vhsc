@@ -160,11 +160,6 @@ class BiModalRegressor(nn.Module):
         )
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-        if x1.ndim == 1:
-            x1 = x1.unsqueeze(-1)
-        if x2.ndim == 1:
-            x2 = x2.unsqueeze(-1)
-
         z1 = self.x1_encoder(x1)
         z2 = self.x2_encoder(x2)
         z = torch.cat([z1, z2], dim=-1)

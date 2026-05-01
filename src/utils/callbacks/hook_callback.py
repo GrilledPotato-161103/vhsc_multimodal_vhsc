@@ -73,7 +73,8 @@ class AdversarialVizCallback(pl.Callback):
                         prog_bar=False)
         
         variance = torch.stack(outputs["variances"], dim=0)
-        pcc = pearson_correlation(variance, losses)
+        indices = torch.argsort(losses[:, -1])
+        pcc = pearson_correlation(losses[indices], variance[indices])
         pl_module.log(f"val/loss_unc_pcc_{pl_module.hparams.eta:.2f}",
                         pcc.item(), 
                         on_step=True,

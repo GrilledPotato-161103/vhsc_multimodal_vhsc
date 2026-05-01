@@ -152,7 +152,6 @@ class BPInjectDataset(Dataset):
         return tuple(inputs), y, {self.bp_name : torch.Tensor([signal])}
 
 
-
 class ToyBiModalDataModule(L.LightningDataModule):
     """
     LightningDataModule for toy bi-modal regression:
