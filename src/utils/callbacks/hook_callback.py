@@ -179,7 +179,7 @@ class AdversarialVizCallback(pl.Callback):
         fig_quiver.colorbar(ax.collections[0], ax=ax, label="Value")
         q = ax.quiver(
             (grid_x[slice_idx] - x_min) / (x_max - x_min) * self.grid_size, (grid_y[slice_idx] - y_min) / (y_max - y_min) * self.grid_size, 
-            u_grid[slice_idx], v_grid[slice_idx],
+            v_grid[slice_idx], u_grid[slice_idx],
             color='r',
             label="Adversarial vectors"
         )
