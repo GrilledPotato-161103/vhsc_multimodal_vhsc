@@ -132,8 +132,8 @@ class BayesCap1D(nn.Module):
         h = self.blocks(h)
 
         mu = self.mu_head(h)
-        alpha = F.relu(self.alpha_head(h)) + self.eps
-        beta = F.relu(self.beta_head(h)) + self.eps
+        alpha = F.softplus(self.alpha_head(h)) + self.eps
+        beta = F.softplus(self.beta_head(h)) + self.eps
 
         out_prefix = original_shape[:-1]
         mu = mu.view(*out_prefix, self.output_dim)
