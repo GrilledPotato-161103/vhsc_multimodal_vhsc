@@ -31,6 +31,7 @@ class BayesCap1D(nn.Module):
     def __init__(
         self,
         input_dim: int,
+        output_dim: int,
         hidden_dims: Sequence | List | int = 256,
         bottleneck_dim: Optional[int] = None,
         dropout: float = 0.0,
@@ -44,8 +45,9 @@ class BayesCap1D(nn.Module):
         if not isinstance(hidden_dims, Sequence):
             hidden_dims = [hidden_dims]
         self.input_dim = input_dim
+        self.output_dim = output_dim
         self.hidden_dims = hidden_dims
-        self.uncertainty_dim = input_dim if per_dim_uncertainty else 1
+        self.uncertainty_dim = output_dim if per_dim_uncertainty else 1
         self.eps = eps
 
         bottleneck_dim = bottleneck_dim or hidden_dims[-1]
@@ -82,7 +84,7 @@ class BayesCap1D(nn.Module):
 
         self.mu_head = MLP(in_dim= hidden_dim,
                            hidden_dims=[hidden_dim],
-                           out_dim=input_dim,
+                           out_dim=output_dim,
                            activation=activation,
                            norm=norm,
                            residual= False,
@@ -114,7 +116,11 @@ class BayesCap1D(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, ctx: BreakpointContext) -> BreakpointOutput:
-        y_hat = ctx.output
+        if ctx.position == "after":
+            y_hat = ctx.output
+        else:
+            y_hat = ctx.inputs[0]
+
         original_shape = y_hat.shape
         if original_shape[-1] != self.input_dim:
             raise ValueError(
@@ -130,7 +136,7 @@ class BayesCap1D(nn.Module):
         beta = F.softplus(self.beta_head(h)) + self.eps
 
         out_prefix = original_shape[:-1]
-        mu = mu.view(*out_prefix, self.input_dim)
+        mu = mu.view(*out_prefix, self.output_dim)
         alpha = alpha.view(*out_prefix, self.uncertainty_dim)
         beta = beta.view(*out_prefix, self.uncertainty_dim)
         cls = BreakpointOutput(

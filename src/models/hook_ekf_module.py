@@ -379,8 +379,8 @@ class ModelEKFInjectModule(LightningModule):
                 loss.mean().backward()
                 # Normalize gradient để trích xuất pha only
                 grad_norm = torch.sqrt(x1.grad ** 2 + x2.grad ** 2)
-                x1_jump = x1.grad.sign() / grad_norm
-                x2_jump = x2.grad.sign() / grad_norm
+                x1_jump = x1.grad / grad_norm
+                x2_jump = x2.grad / grad_norm
                 # Cập nhật vào bảng kết quả để đưa ra callback visualize
                 result["losses"].append(loss.clone().detach())
                 result["positions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))

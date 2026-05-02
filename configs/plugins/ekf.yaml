@@ -23,13 +23,14 @@ breakpoints:
       valid: true
     pos: before
   
-  - layer_name: head
+  - layer_name: head.net.4
     bp: 
       _target_: src.plugins.hook.Breakpoint
       name: uncertainty
       callback:
         _target_: src.plugins.head.bayescap.BayesCap1D
-        input_dim: 1
+        input_dim: 16
+        output_dim: 1
         hidden_dims: [16, 16, 8]
         per_dim_uncertainty: False
         dropout: 0.3
@@ -37,7 +38,7 @@ breakpoints:
         activation: silu
       mutate: false
       valid: true
-    pos: after
+    pos: before
 
 
 # === EKF Experiment Configuration ===
