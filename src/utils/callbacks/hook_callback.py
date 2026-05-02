@@ -168,7 +168,7 @@ class AdversarialVizCallback(pl.Callback):
         # figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
 
         # --- C. Variance Map ---
-        figs_to_log["val_plot/Variance_Map"] = create_heatmap(var_smooth, 'plasma')
+        figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma')
 
         # --- D. Covariance Map ---
         # Dùng màu có tính đối xứng (RdBu) vì covariance có thể âm hoặc dương
