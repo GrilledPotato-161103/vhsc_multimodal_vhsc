@@ -1,0 +1,62 @@
+target: BiModalRegressor
+model_checkpoint: data/checkpoints/toy.pth
+plugins_checkpoint: null
+breakpoints:
+  - layer_name: head
+    bp: 
+      _target_: src.plugins.hook.Breakpoint
+      name: reconstructor
+      callback: 
+        _target_: src.plugins.reconstructor.linear.BilinearReconstructor
+        d_1: 16
+        d_2: 16
+        hidden_dim: 16
+        activation: silu
+        norm: batch
+        dropout: 0.3
+        order: adn
+        concat: true
+        dist: 
+          _target_: torch.nn.MSELoss
+          reduction: none
+      mutate: true
+      valid: true
+    pos: before
+  
+  - layer_name: head
+    bp: 
+      _target_: src.plugins.hook.Breakpoint
+      name: uncertainty
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        output_dim: 1
+        hidden_dims: [16, 16, 8]
+        per_dim_uncertainty: False
+        dropout: 0.3
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after
+
+
+# === EKF Experiment Configuration ===
+
+sigma_z:
+  mode: "mc"                    # "mc" | "jacobian"
+  n_mc: 5000
+  x_range_train: [-1.0, 1.0]
+  x_range_ood: [-0.6, 1.4]
+
+ekf:
+  enabled: true
+  jacobian_mode: "autograd"
+  diagonal: true
+  sigma_net_recon: 0.0
+  sigma_net_pred: 0.0
+
+nll:
+  learn_calibration: false
+  beta_init: 0.5
+  eps: 1.0e-8
