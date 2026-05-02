@@ -31,8 +31,10 @@ def pearson_correlation(x: torch.Tensor, y: torch.Tensor):
     return numerator / denominator
 
 class AdversarialVizCallback(pl.Callback):
-    def __init__(self, grid_size: int = 50, smooth: float = 2.):
+    def __init__(self, grid_size: int = 50, smooth: float = 2., x1_range  = [-1., 1.], x2_range = [-1., 1.]):
         super().__init__()
+        self.x1_range = x1_range
+        self.x2_range = x2_range
         self.grid_size = grid_size # Độ phân giải của lưới (mesh)
         self.smooth = smooth
         self.reset_states()
@@ -103,10 +105,9 @@ class AdversarialVizCallback(pl.Callback):
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
         variances = torch.concatenate(self.variances, dim=0).cpu().numpy().flatten()
         x, y = positions[..., 0].flatten(), positions[..., 1].flatten()
-        # mini, maxi = min(x.min(), y.min()), max(x.max(), y.max())
-        # x = np.interp(x, (mini, maxi), (0, self.grid_size))
-        # y = np.interp(y, (mini, maxi), (0, self.grid_size))
-        grid_x, grid_y = np.mgrid[-2:2:complex(0, self.grid_size), -2:2:complex(0, self.grid_size)]
+        x_min, x_max = self.x1_range
+        y_min, y_max = self.x2_range
+        grid_x, grid_y = np.mgrid[x_min:x_max:complex(0, self.grid_size), y_min:y_max:complex(0, self.grid_size)]
 
         # Hàm nội suy từ điểm phân tán lên lưới
         def rasterize(values):

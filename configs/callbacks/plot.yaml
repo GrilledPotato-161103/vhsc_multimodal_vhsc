@@ -2,3 +2,5 @@ plot:
   _target_: src.utils.callbacks.hook_callback.AdversarialVizCallback
   grid_size: 100
   smooth: 1.
+  x1_range: ${data.x1_range}
+  x2_range: ${data.x2_range}
