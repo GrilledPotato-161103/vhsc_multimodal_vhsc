@@ -153,9 +153,9 @@ class AdversarialVizCallback(pl.Callback):
         # Hàm tiện ích vẽ Heatmap
         def create_heatmap(z_data, colorscale='viridis', ax = None, title=""):
             if isinstance(ax, Axes): 
-                fig, ax = plt.subplots(figsize=(8, 8))
-            else:
                 fig = None
+            else:
+                fig, ax = plt.subplots(figsize=(8, 8))
             sns.heatmap(z_data, ax=ax, cmap=colorscale,
                               cbar=False)
             if fig is not None:
