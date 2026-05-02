@@ -151,28 +151,29 @@ class AdversarialVizCallback(pl.Callback):
         # --- A. Quiver Plot (Trường Vector) ---
         # Lấy mẫu thưa hơn để biểu đồ không bị rối mịt mù
         # Hàm tiện ích vẽ Heatmap
-        def create_heatmap(z_data, colorscale='viridis', ax = None):
+        def create_heatmap(z_data, colorscale='viridis', ax = None, title=""):
             if isinstance(ax, Axes): 
-                sns.heatmap(z_data, ax=ax, cmap=colorscale,
-                              cbar=False)
-                return 
-            fig, ax = plt.subplots(figsize=(8, 8))
+                fig, ax = plt.subplots(figsize=(8, 8))
+            else:
+                fig = None
             sns.heatmap(z_data, ax=ax, cmap=colorscale,
                               cbar=False)
-            fig.colorbar(ax.collections[0], ax=ax, label="Value")
+            if fig is not None:
+                fig.colorbar(ax.collections[0], ax=ax, label="Value")
             ax.set_axis_off()
+            ax.set_title(title)
             return fig
 
         # --- B. Loss Map ---
         # figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
 
         # --- C. Variance Map ---
-        figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma')
+        figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma', title="Log Variance Field")
         
 
         # --- D. Covariance Map ---
         # Dùng màu có tính đối xứng (RdBu) vì covariance có thể âm hoặc dương
-        figs_to_log["val_plot/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r')
+        figs_to_log["val_plot/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r', title="Covariance Map")
 
         fig_quiver, ax = plt.subplots(figsize=(8, 8))
         create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', ax=ax)
@@ -184,7 +185,7 @@ class AdversarialVizCallback(pl.Callback):
             color='r',
             label="Adversarial vectors"
         )
-        ax.set_title("Adversarial test")
+        ax.set_title("Log Loss Field with Adversarial Vector Field")
         ax.set_axis_off()
         
         figs_to_log["val_plot/Loss_Log_Field"] = fig_quiver
