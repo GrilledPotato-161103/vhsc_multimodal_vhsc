@@ -112,7 +112,7 @@ class AdversarialVizCallback(pl.Callback):
         # Hàm nội suy từ điểm phân tán lên lưới
         def rasterize(values):
             # Nội suy tuyến tính
-            grid = griddata((x, y), values.flatten(), (grid_x, grid_y), method='linear', rescale=True)
+            grid = griddata((x, y), values.flatten(), (grid_x, grid_y), method='linear', rescale=True, fill_value=0)
             # Xử lý các điểm NaN (ngoài rìa) bằng nearest neighbor
             nan_mask = np.isnan(grid) | np.isinf(grid) | (grid == 0)
             if np.any(nan_mask):
