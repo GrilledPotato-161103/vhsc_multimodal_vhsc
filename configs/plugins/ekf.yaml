@@ -30,7 +30,7 @@ breakpoints:
       callback:
         _target_: src.plugins.head.bayescap.BayesCap1D
         input_dim: 1
-        hidden_dims: [8, 8, 4]
+        hidden_dims: [16, 16, 8]
         per_dim_uncertainty: False
         dropout: 0.3
         norm: batch

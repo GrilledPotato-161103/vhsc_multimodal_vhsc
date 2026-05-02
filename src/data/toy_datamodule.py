@@ -231,6 +231,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     noise_ratio=0.,
                                                     generator=generator,
                                                     seed=self.hparams.seed,
+                                                    sampling="uniform"
                                                     )
 
         self.test_dataset = BiModalEquationDataset(
@@ -242,6 +243,7 @@ class ToyBiModalDataModule(L.LightningDataModule):
                                                     noise_ratio=0.,
                                                     generator=generator,
                                                     seed=self.hparams.seed,
+                                                    sampling="uniform"
                                                     )
         
     def train_dataloader(self) -> DataLoader:
