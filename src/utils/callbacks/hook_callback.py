@@ -161,6 +161,7 @@ class AdversarialVizCallback(pl.Callback):
             sns.heatmap(z_data, ax=ax, cmap=colorscale,
                               cbar=False)
             fig.colorbar(ax.collections[0], ax=ax, label="Value")
+            ax.set_axis_off()
             return fig
 
         # --- B. Loss Map ---
@@ -177,12 +178,13 @@ class AdversarialVizCallback(pl.Callback):
         create_heatmap(cov_grid, 'viridis', ax=ax)
         fig_quiver.colorbar(ax.collections[0], ax=ax, label="Value")
         q = ax.quiver(
-            (grid_x[slice_idx] + 2) / 2 * self.grid_size, (grid_y[slice_idx] + 2) / 2 * self.grid_size, 
+            (grid_x[slice_idx] - x_min) / (x_max - x_min) * self.grid_size, (grid_y[slice_idx] - x_min) / (x_max - x_min) * self.grid_size, 
             u_grid[slice_idx], v_grid[slice_idx],
             color='r',
             label="Adversarial vectors"
         )
         ax.set_title("Adversarial test")
+        ax.set_axis_off()
         
         figs_to_log["val/Vector_Field"] = fig_quiver
 
