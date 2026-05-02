@@ -168,11 +168,11 @@ class AdversarialVizCallback(pl.Callback):
         # figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
 
         # --- C. Variance Map ---
-        figs_to_log["val/Variance_Map"] = create_heatmap(var_smooth, 'plasma')
+        figs_to_log["val_plot/Variance_Map"] = create_heatmap(var_smooth, 'plasma')
 
         # --- D. Covariance Map ---
         # Dùng màu có tính đối xứng (RdBu) vì covariance có thể âm hoặc dương
-        figs_to_log["val/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r')
+        figs_to_log["val_plot/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r')
 
         fig_quiver, ax = plt.subplots(figsize=(8, 8))
         create_heatmap(np.log(loss_smooth + 1e-6), 'viridis', ax=ax)
@@ -186,7 +186,7 @@ class AdversarialVizCallback(pl.Callback):
         ax.set_title("Adversarial test")
         ax.set_axis_off()
         
-        figs_to_log["val/Loss_Field"] = fig_quiver
+        figs_to_log["val_plot/Loss_Log_Field"] = fig_quiver
 
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger
