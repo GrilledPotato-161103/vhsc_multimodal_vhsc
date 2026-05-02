@@ -150,7 +150,6 @@ class AdversarialVizCallback(pl.Callback):
 
         # --- A. Quiver Plot (Trường Vector) ---
         # Lấy mẫu thưa hơn để biểu đồ không bị rối mịt mù
-        slice_idx = (slice(None, None, 2), slice(None, None, 2))
         # Hàm tiện ích vẽ Heatmap
         def create_heatmap(z_data, colorscale='viridis', ax = None):
             if isinstance(ax, Axes): 
@@ -169,17 +168,19 @@ class AdversarialVizCallback(pl.Callback):
 
         # --- C. Variance Map ---
         figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma')
+        
 
         # --- D. Covariance Map ---
         # Dùng màu có tính đối xứng (RdBu) vì covariance có thể âm hoặc dương
         figs_to_log["val_plot/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r')
 
         fig_quiver, ax = plt.subplots(figsize=(8, 8))
-        create_heatmap(np.log(loss_smooth + 1e-6), 'viridis', ax=ax)
+        create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', ax=ax)
         fig_quiver.colorbar(ax.collections[0], ax=ax, label="Value")
+        slice_idx = (slice(None, None, 5), slice(None, None, 5))
         q = ax.quiver(
             (grid_y[slice_idx] - y_min) / (y_max - y_min) * self.grid_size, (grid_x[slice_idx] - x_min) / (x_max - x_min) * self.grid_size, 
-            v_grid[slice_idx], u_grid[slice_idx],
+            u_grid[slice_idx], v_grid[slice_idx],
             color='r',
             label="Adversarial vectors"
         )
