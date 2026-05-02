@@ -101,7 +101,7 @@ class AdversarialVizCallback(pl.Callback):
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
         directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)
         # B*, N, 1
-        intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten() * 20
+        intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten() * 5
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
         variances = torch.concatenate(self.variances, dim=0).cpu().numpy().flatten()
         x, y = positions[..., 0].flatten(), positions[..., 1].flatten()
@@ -165,7 +165,7 @@ class AdversarialVizCallback(pl.Callback):
             return fig
 
         # --- B. Loss Map ---
-        figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
+        # figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
 
         # --- C. Variance Map ---
         figs_to_log["val/Variance_Map"] = create_heatmap(var_smooth, 'plasma')
@@ -175,7 +175,7 @@ class AdversarialVizCallback(pl.Callback):
         figs_to_log["val/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r')
 
         fig_quiver, ax = plt.subplots(figsize=(8, 8))
-        create_heatmap(cov_grid, 'viridis', ax=ax)
+        create_heatmap(np.log(loss_smooth + 1e-6), 'viridis', ax=ax)
         fig_quiver.colorbar(ax.collections[0], ax=ax, label="Value")
         q = ax.quiver(
             (grid_y[slice_idx] - y_min) / (y_max - y_min) * self.grid_size, (grid_x[slice_idx] - x_min) / (x_max - x_min) * self.grid_size, 
@@ -186,7 +186,7 @@ class AdversarialVizCallback(pl.Callback):
         ax.set_title("Adversarial test")
         ax.set_axis_off()
         
-        figs_to_log["val/Vector_Field"] = fig_quiver
+        figs_to_log["val/Loss_Field"] = fig_quiver
 
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger
