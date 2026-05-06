@@ -327,7 +327,8 @@ class ModelEKFInjectModule(LightningModule):
         """
         
         # Cached files
-        loss, logits, _, recon, unc, ekf = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+        with torch.enable_grad():
+            loss, logits, _, recon, unc, ekf = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         self.val_loss(loss)

@@ -63,6 +63,7 @@ def compute_predictor_jacobian(
     y_pred = predictor_fn(z_recon_g)
     if y_pred.dim() > 1:
         y_pred = y_pred.squeeze(-1)  # (B,)
+    print(y_pred.requires_grad)
     grads = torch.autograd.grad(
         y_pred.sum(), z_recon_g, create_graph=True
     )[0]  # (B, d')
