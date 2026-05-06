@@ -15,6 +15,7 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
+from plugins.ekf_propagation import full_ekf_propagation
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
@@ -98,8 +99,12 @@ class ModelEKFInjectModule(LightningModule):
         if ekf_enabled:
             from plugins.sigma_z import GroundTruthSigmaZ
             from plugins.head.ekf_nll_loss import EKFGGDNLLLoss
+            from plugins.ekf_propagation import make_reconstructor_fn, make_predictor_fn
             enc1 = self.net.x1_encoder
             enc2 = self.net.x2_encoder
+            reconstructor = self.recon_bp.callback
+            self.recon_fn = make_reconstructor_fn(reconstructor, {1, 1})
+            self.pred_fn = make_predictor_fn(self.net.head)
             sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
             self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
             self.ekf_loss = EKFGGDNLLLoss(eps=1e-8)
@@ -198,9 +203,19 @@ class ModelEKFInjectModule(LightningModule):
         variance = bayescap_variance_1d(alpha, beta, target_dim=1, eps=1e-6)
         unc_loss = self.unc_criterion(mu, alpha, beta, logits, y)
 
+        ekf_nll = torch.tensor(0.0, device=self.device)
+        if self.hparams.ekf_enabled and all(param.requires_grad for param in self.recon_bp.callback.parameters()):
+            z = torch.cat(srcs, dim=-1).detach()  # (B, 32)
+            sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
+                z=z, diag_sigma_z=self.diag_sigma_z,
+                reconstructor_fn=self.recon_fn, predictor_fn=self.pred_fn
+            )
+            ekf_nll = self.ekf_loss(y_true=y, mu_pred=logits, sigma_pred_sq=sigma_pred_sq)
+
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace}, \
-                {"mu": mu, "var": variance, "loss": unc_loss["loss"], "identity": unc_loss["identity_loss"], "nll": unc_loss["nll_loss"]}
+                {"mu": mu, "var": variance, "loss": unc_loss["loss"], "identity": unc_loss["identity_loss"], "nll": unc_loss["nll_loss"]}, \
+                {'nll': ekf_nll, 'sigma_rec': diag_sigma_recon, 'sigma': sigma_pred_sq}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -212,7 +227,7 @@ class ModelEKFInjectModule(LightningModule):
         :return: A tensor of losses between model predictions and targets.
         """
         # Tạm thời tắt reconstruction để đánh giá uncertainty
-        loss, logits, y, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+        loss, logits, y, recon, unc, ekf = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
@@ -255,17 +270,14 @@ class ModelEKFInjectModule(LightningModule):
         if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2:
             unc["loss"] *= 0
         
-        srcs = recon["srcs"]
-        ekf_nll = torch.tensor(0.0, device=self.device)
+        
         if self.hparams.ekf_enabled and all(param.requires_grad for param in self.recon_bp.callback.parameters()):
-            from plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
+            srcs = recon["srcs"]
+            ekf_nll = torch.tensor(0.0, device=self.device)
             z = torch.cat(srcs, dim=-1).detach()  # (B, 32)
-            reconstructor = self.recon_bp.callback
-            recon_fn = make_reconstructor_fn(reconstructor, tuple(signal))
-            pred_fn = make_predictor_fn(self.net.head)
             sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
                 z=z, diag_sigma_z=self.diag_sigma_z,
-                reconstructor_fn=recon_fn, predictor_fn=pred_fn
+                reconstructor_fn=self.recon_fn, predictor_fn=self.pred_fn
             )
             ekf_nll = self.ekf_loss(y_true=y, mu_pred=logits, sigma_pred_sq=sigma_pred_sq)
 
@@ -315,7 +327,7 @@ class ModelEKFInjectModule(LightningModule):
         """
         
         # Cached files
-        loss, logits, _, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+        loss, logits, _, recon, unc, ekf = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         self.val_loss(loss)
@@ -372,7 +384,7 @@ class ModelEKFInjectModule(LightningModule):
                 if x2.grad is not None: x2.grad.zero_()
                 
                 # Forward pass để tính loss
-                loss, logits, _, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
+                loss, logits, _, recon, unc, _ = self.model_step(((x1, x2), y), kwargs=kwargs)
                 signal = recon["trace"].trace["signal"]
                 kwargs["bp_signal"] = signal
                 # Lan truyền ngược để trích xuất gradient
@@ -429,7 +441,7 @@ class ModelEKFInjectModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, logits, y, recon, unc = self.model_step(batch)
+        loss, logits, y, recon, unc, ekf = self.model_step(batch)
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
