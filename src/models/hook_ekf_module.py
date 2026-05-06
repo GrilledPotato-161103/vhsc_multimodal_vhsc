@@ -198,7 +198,7 @@ class ModelEKFInjectModule(LightningModule):
 
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace}, \
-                {"var": sigma_pred_sq, "loss": ekf_nll}
+                {"var": self.unc_criterion.get_variance(sigma_pred_sq) , "loss": ekf_nll}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int

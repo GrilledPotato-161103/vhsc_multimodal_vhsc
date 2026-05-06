@@ -73,3 +73,16 @@ class EKFGGDNLLLoss(nn.Module):
     def extra_repr(self) -> str:
         return (f"beta={torch.exp(self.log_beta).item():.3f}, "
                 f"learn_calibration={self.learn_calibration}")
+
+    def get_variance(self, sigma_pred_sq):
+        beta = torch.exp(self.log_beta)
+
+        if self.learn_calibration:
+            a = torch.exp(self.log_a)
+            alpha = a * torch.sqrt(sigma_pred_sq + self.eps) + self.b
+        else:
+            alpha = torch.sqrt(sigma_pred_sq + self.eps)
+
+        alpha = alpha.clamp(min=self.eps)
+
+        return alpha.pow(2) * torch.exp(torch.lgamma(3 / beta) - torch.lgamma(1 / beta))
