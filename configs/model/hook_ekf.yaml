@@ -4,7 +4,6 @@ _partial_: True
 expression: ${expression}
 
 recon_bp: reconstructor.0
-unc_bp: uncertainty.0
 
 optimizer:
   _target_: torch.optim.Adam
@@ -26,12 +25,11 @@ recon_criterion:
   reduction: none
 
 unc_criterion:
-  _target_: src.plugins.head.bayescap.BayesCap1DLoss
-  reduction: none
-  lambda_identity: 1.0
-  lambda_nll: 0.05
-  identity_mode: l2
-  nll_mode: paper
+  _target_: src.plugins.head.ekf_nll_loss.EKFGGDNLLLoss
+  eps: 1.0e-8
+  learn_calibration: True
 
 epoch_phase: 10
 mask_rate: 0.
+
+sigma_z_mode: ${plugins.sigma_z.mode}

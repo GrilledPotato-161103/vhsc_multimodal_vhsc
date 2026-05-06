@@ -63,7 +63,7 @@ def compute_predictor_jacobian(
     y_pred = predictor_fn(z_recon_g)
     if y_pred.dim() > 1:
         y_pred = y_pred.squeeze(-1)  # (B,)
-    print(y_pred.requires_grad)
+    # print(y_pred.requires_grad)
     grads = torch.autograd.grad(
         y_pred.sum(), z_recon_g, create_graph=True
     )[0]  # (B, d')
@@ -96,7 +96,7 @@ def make_reconstructor_fn(reconstructor: nn.Module, signal: tuple) -> Callable:
         # z: (32,) single sample
         mod_1 = z[:16]
         mod_2 = z[16:]
-        print(signal)
+        # print(signal)
         p1, p2 = signal
         if p1 == 0:
             rec_1 = reconstructor.ln21(mod_2.unsqueeze(0)).squeeze(0)

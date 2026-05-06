@@ -22,24 +22,6 @@ breakpoints:
       mutate: true
       valid: true
     pos: before
-  
-  - layer_name: head.net.4
-    bp: 
-      _target_: src.plugins.hook.Breakpoint
-      name: uncertainty
-      callback:
-        _target_: src.plugins.head.bayescap.BayesCap1D
-        input_dim: 16
-        output_dim: 1
-        hidden_dims: [16, 16, 8]
-        per_dim_uncertainty: False
-        dropout: 0.3
-        norm: batch
-        activation: silu
-      mutate: false
-      valid: true
-    pos: before
-
 
 # === EKF Experiment Configuration ===
 
@@ -50,7 +32,6 @@ sigma_z:
   x_range_ood: [-0.6, 1.4]
 
 ekf:
-  enabled: true
   jacobian_mode: "autograd"
   diagonal: true
   sigma_net_recon: 0.0

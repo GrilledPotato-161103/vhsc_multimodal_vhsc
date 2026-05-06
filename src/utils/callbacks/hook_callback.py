@@ -141,10 +141,6 @@ class AdversarialVizCallback(pl.Callback):
         # E[L], E[V], E[L*V] thông qua Gaussian filter
         loss_smooth = gaussian_filter(loss_grid, sigma=self.smooth)
         var_smooth = gaussian_filter(var_grid, sigma=self.smooth)
-        loss_var_smooth = gaussian_filter(loss_grid * var_grid, sigma=self.smooth)
-        
-        # Cov(L, V) = E[LV] - E[L]E[V]
-        cov_grid = loss_var_smooth - (loss_smooth * var_smooth)
         # 5. Vẽ Plotly Charts
         figs_to_log = {}
 
@@ -169,11 +165,6 @@ class AdversarialVizCallback(pl.Callback):
 
         # --- C. Variance Map ---
         figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma', title="Log Variance Field")
-        
-
-        # --- D. Covariance Map ---
-        # Dùng màu có tính đối xứng (RdBu) vì covariance có thể âm hoặc dương
-        figs_to_log["val_plot/Loss_Variance_Covariance_Map"] = create_heatmap(cov_grid, 'RdBu_r', title="Covariance Map")
 
         fig_quiver, ax = plt.subplots(figsize=(8, 8))
         create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', ax=ax)
