@@ -103,7 +103,7 @@ class ModelEKFInjectModule(LightningModule):
             enc1 = self.net.x1_encoder
             enc2 = self.net.x2_encoder
             reconstructor = self.recon_bp.callback
-            self.recon_fn = make_reconstructor_fn(reconstructor, {1, 1})
+            self.recon_fn = make_reconstructor_fn(reconstructor, (1, 1))
             self.pred_fn = make_predictor_fn(self.net.head)
             sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
             self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
