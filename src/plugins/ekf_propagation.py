@@ -95,6 +95,7 @@ def make_reconstructor_fn(reconstructor: nn.Module, signal: tuple) -> Callable:
         # z: (32,) single sample
         mod_1 = z[:16]
         mod_2 = z[16:]
+        print(signal)
         p1, p2 = signal
         if p1 == 0:
             rec_1 = reconstructor.ln21(mod_2.unsqueeze(0)).squeeze(0)
