@@ -26,7 +26,7 @@ breakpoints:
 # === EKF Experiment Configuration ===
 
 sigma_z:
-  mode: "mc"                    # "mc" | "jacobian"
+  mode: "jacobian"                    # "mc" | "jacobian"
   n_mc: 5000
   x_range_train: [-1.0, 1.0]
   x_range_ood: [-0.6, 1.4]
@@ -38,6 +38,6 @@ ekf:
   sigma_net_pred: 0.0
 
 nll:
-  learn_calibration: false
+  learn_calibration: true
   beta_init: 0.5
   eps: 1.0e-8
