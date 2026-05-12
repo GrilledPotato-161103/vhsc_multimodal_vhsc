@@ -22,3 +22,5 @@ scheduler:
   factor: 0.5
   patience: 10
   min_lr: 1e-6
+
+cache_name: checkpoint

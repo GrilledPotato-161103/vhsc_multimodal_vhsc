@@ -32,8 +32,9 @@ class GroundTruthSigmaZ:
         a, b = self.x_range
         mu_x = torch.tensor([(a + b) / 2.0], device=self.device)
         var_x = (b - a) ** 2 / 12.0
-        J1 = jacrev(self.encoder1)(mu_x.unsqueeze(0)).squeeze()  # (16,)
-        J2 = jacrev(self.encoder2)(mu_x.unsqueeze(0)).squeeze()  # (16,)
+        with torch.no_grad():
+            J1 = jacrev(self.encoder1)(mu_x.unsqueeze(0)).squeeze()  # (16,)
+            J2 = jacrev(self.encoder2)(mu_x.unsqueeze(0)).squeeze()  # (16,)
         return torch.cat([var_x * J1 ** 2, var_x * J2 ** 2])  # (32,)
 
     @property

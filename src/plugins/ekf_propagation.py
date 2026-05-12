@@ -43,8 +43,9 @@ def propagate_sigma_z_to_sigma_recon(
     Returns:
         diag_sigma_recon: (B, d')
     """
-    # What if we 
-    return (J_f ** 2) @ (1 / torch.clamp_min(diag_sigma_z, 1e-4))  # (B, d', 32) x (32,) -> (B, d')
+    # What if we
+    print(diag_sigma_z[:5], J_f.mean(dim=(0, 1))[:5])
+    return (J_f ** 2) @  diag_sigma_z  # (B, d', 32) x (32,) -> (B, d')
 
 
 def compute_predictor_jacobian(
@@ -84,7 +85,7 @@ def propagate_sigma_recon_to_sigma_pred(
     Returns:
         sigma_pred_sq: (B,) per-sample predictive variance
     """
-    return (J_g ** 2 / torch.clamp_min(diag_sigma_recon, 1e-4)).sum(dim=-1)  # (B,)
+    return (J_g ** 2 * torch.clamp_min(diag_sigma_recon, 1e-4)).sum(dim=-1)  # (B,)
 
 
 def make_reconstructor_fn(reconstructor: nn.Module, signal: tuple) -> Callable:

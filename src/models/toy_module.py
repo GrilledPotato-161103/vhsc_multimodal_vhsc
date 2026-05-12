@@ -29,6 +29,7 @@ class BiModalLightningModule(LightningModule):
         compile_model: bool = False,
         loss_name: Literal["mse", "mae", "huber"] = "mse",
         huber_delta: float = 1.0,
+        cache_name: str = "checkpoint"
     ) -> None:
         super().__init__()
 
@@ -87,7 +88,6 @@ class BiModalLightningModule(LightningModule):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         (x1, x2), y = batch
         y_hat = self.forward(x1.unsqueeze(-1), x2.unsqueeze(-1))
-
         if y_hat.ndim == 2 and y_hat.shape[-1] == 1:
             y_hat = y_hat.squeeze(-1)
 
@@ -161,7 +161,7 @@ class BiModalLightningModule(LightningModule):
     
     def on_save_checkpoint(self, checkpoint):
         super().on_save_checkpoint(checkpoint)
-        torch.save(self.net, "data/checkpoints/toy.pth")
+        torch.save(self.net, f"data/checkpoints/{self.hparams.cache_name}.pth")
 
     def configure_optimizers(self) -> Dict[str, Any] | torch.optim.Optimizer:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())

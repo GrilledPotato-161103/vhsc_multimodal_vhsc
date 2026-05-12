@@ -42,44 +42,19 @@ class AdversarialVizCallback(pl.Callback):
 
     def reset_states(self):
         self.positions = []
-        self.directions = []
-        self.intensities = []
         self.losses = []
         self.variances = []
+        self.logits = []
+        self.y = []
     
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        # print(f"DEBUG: Batch {batch_idx} ended.")
-        # Lấy jump distance để tính loga của loss gain
-        bp_signal = outputs["bp_signal"]
-        # for key in outputs: 
-        #     print(key, len(outputs[key]), outputs[key][0].shape if isinstance(outputs[key][0], torch.Tensor) else "")
-        # import IPython; IPython.embed()
-        # B*, N
-        losses = torch.stack(outputs["losses"], dim=0)
-        # B, N, 2
-        positions = torch.stack(outputs["positions"], dim=0)
-        # Get loss gain
-        losses_gain = torch.log(losses - losses[:, [0]])
-        # B, N
-        jumps = torch.full_like(losses_gain, pl_module.hparams.eta)
-        jumps[:, 0] = 0
-        jumps = torch.cumsum(jumps, dim=1).to(losses_gain.device)
-        # B, N, 2
-        jumps_one = torch.nn.functional.pad(jumps, (0, 1), value=1)
-        
-        weights, _, _, _ = torch.linalg.lstsq(jumps_one.reshape(-1, 2), losses_gain.reshape(-1, 1))
-
-        # Get logarithm weight as correlation
-        degree = weights[0]
-        pl_module.log(f"val/loss_gain_on_{pl_module.hparams.eta:.2f}",
-                        degree.detach().cpu().item(), 
-                        on_step=True,
-                        on_epoch=True,
-                        prog_bar=False)
-        
-        variance = torch.stack(outputs["variances"], dim=0)
-        indices = torch.argsort(losses[:, -1])
-        pcc = pearson_correlation(losses[indices], variance[indices])
+        # print(len(outputs))
+        loss, logits, recon, unc = outputs
+        (x1, x2), y = batch
+        positions = torch.stack((x1, x2), dim=-1)
+        variance = unc['var']
+        indices = torch.argsort(loss)
+        pcc = pearson_correlation(loss[indices], variance[indices])
         pl_module.log(f"val/loss_unc_pcc_{pl_module.hparams.eta:.2f}",
                         pcc.item(), 
                         on_step=True,
@@ -87,10 +62,10 @@ class AdversarialVizCallback(pl.Callback):
                         prog_bar=False)
         
         self.positions.append(positions)
-        self.directions.append(torch.stack(outputs["directions"], dim=0))
-        self.intensities.append(torch.stack(outputs["intensities"], dim=0))
-        self.losses.append(losses)
+        self.losses.append(loss)
         self.variances.append(variance)
+        self.y.append(y)
+        self.logits.append(logits)
         return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
 
     def on_validation_epoch_end(self, trainer, pl_module):
@@ -99,11 +74,10 @@ class AdversarialVizCallback(pl.Callback):
             return super().on_validation_epoch_end(trainer, pl_module)
         # B*, N, 2
         positions = torch.concatenate(self.positions, dim=0).cpu().numpy().reshape(-1, 2)
-        directions = torch.concatenate(self.directions, dim=0).cpu().numpy().reshape(-1, 2)
-        # B*, N, 1
-        intensities = torch.concatenate(self.intensities, dim=0).cpu().numpy().flatten() * 5
         losses = torch.concatenate(self.losses, dim=0).cpu().numpy().flatten()
         variances = torch.concatenate(self.variances, dim=0).cpu().numpy().flatten()
+        logits = torch.concatenate(self.logits, dim=0).cpu().numpy().flatten()
+        gt = torch.concatenate(self.y, dim=0).cpu().numpy().flatten()
         x, y = positions[..., 0].flatten(), positions[..., 1].flatten()
         x_min, x_max = self.x1_range
         y_min, y_max = self.x2_range
@@ -121,15 +95,12 @@ class AdversarialVizCallback(pl.Callback):
             
             print(grid.max(), grid.min(), grid.shape)
             return grid
-        # 3. Tính toán và Rasterize
-        # Tính vector U, V
-        u = directions[:, 0] * intensities.flatten()
-        v = directions[:, 1] * intensities.flatten()
-        
-        u_grid = rasterize(u)
-        v_grid = rasterize(v)
         
         # Nội suy Loss và Variance
+        logits_grids = rasterize(logits)
+        y_grids = rasterize(y)
+        logits_y_grid = np.concatenate([logits_grids, y_grids], axis=0)
+
         loss_grid = rasterize(losses)
         loss_grid = np.clip(loss_grid, 0, 20)
 
@@ -165,21 +136,8 @@ class AdversarialVizCallback(pl.Callback):
 
         # --- C. Variance Map ---
         figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma', title="Log Variance Field")
-
-        fig_quiver, ax = plt.subplots(figsize=(8, 8))
-        create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', ax=ax)
-        fig_quiver.colorbar(ax.collections[0], ax=ax, label="Value")
-        slice_idx = (slice(None, None, 5), slice(None, None, 5))
-        q = ax.quiver(
-            (grid_y[slice_idx] - y_min) / (y_max - y_min) * self.grid_size, (grid_x[slice_idx] - x_min) / (x_max - x_min) * self.grid_size, 
-            u_grid[slice_idx], v_grid[slice_idx],
-            color='r',
-            label="Adversarial vectors"
-        )
-        ax.set_title("Log Loss Field with Adversarial Vector Field")
-        ax.set_axis_off()
-        
-        figs_to_log["val_plot/Loss_Log_Field"] = fig_quiver
+        figs_to_log["val_plot/Logit_GT_Map"] = create_heatmap(logits_y_grid, 'plasma', title="Logits/GT Field")
+        figs_to_log["val_plot/Log_Loss_Map"] = create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', title="Log Loss Field")
 
         # 6. Push lên Weights & Biases
         # Đảm bảo trainer đang xài WandbLogger

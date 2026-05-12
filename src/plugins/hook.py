@@ -134,6 +134,69 @@ class BreakpointController:
         return controller
 
     @staticmethod
+    def load_from_state_dict(
+        root: nn.Module,
+        data: dict,
+        strict: bool = True
+    ):
+        controller = BreakpointController()
+        controller.state = data.get("state", {})
+        loaded = []
+        skipped = []
+
+        for spec in data.get("breakpoints", []):
+            callback = spec.get("callback")
+
+            if callback is None:
+                msg = f"Callback '{callback}' is not registered."
+                if strict:
+                    raise ValueError(msg)
+                skipped.append({"spec": spec, "reason": msg})
+                continue
+
+            bp = Breakpoint(
+                name=spec["name"],
+                callback=callback,
+                mutate=spec.get("mutate", False),
+                valid=spec.get("valid", False),
+                kwargs=spec.get("kwargs", {})
+            )
+            try:
+                controller.add_breakpoint(
+                    root=root,
+                    target=spec["layer_name"],
+                    bp=bp,
+                    position=spec.get("position", "after"),
+                )
+                loaded.append(spec)
+            except Exception as e:
+                if strict:
+                    raise
+                skipped.append({"spec": spec, "reason": str(e)})
+
+        return controller, {
+                                "loaded": loaded,
+                                "skipped": skipped,
+                            }
+    @staticmethod
+    def load_from_checkpoint(
+        root: nn.Module,
+        path: str,
+        strict: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Load breakpoint configuration and re-attach hooks to `root`.
+
+        strict=True:
+            raise error if a layer name or callback cannot be resolved.
+        strict=False:
+            skip unresolved entries.
+        """
+        
+        data = torch.load(path, map_location="cpu", weights_only=False)
+        return BreakpointController.load_from_state_dict(root, data, strict)
+    
+    @staticmethod
     def _named_modules_map(root: nn.Module) -> Dict[str, nn.Module]:
         return dict(root.named_modules())
 
@@ -267,8 +330,6 @@ class BreakpointController:
                 item["breakpoint"].callback.cuda()
     
 
-                
-    
     def add_breakpoint_by_module(
         self,
         root: nn.Module,
@@ -297,12 +358,14 @@ class BreakpointController:
                 "breakpoint_name": item["breakpoint"].name,
                 "module_type": type(item["module"]).__name__,
                 "mutate": item["breakpoint"].mutate,
-                "callback_key": item["breakpoint"].callback_key,
+                "valid": item["breakpoint"].valid,
+                "callback": item["breakpoint"].callback,
+                "kwargs": item["kwargs"].kwargs
             }
             for item in self.breakpoints
         ]
 
-    def export_config(self) -> Dict[str, Any]:
+    def state_dict(self) -> Dict[str, Any]:
         """
         Export only serializable breakpoint configuration.
         Does not export raw module objects or hook handles.
@@ -315,14 +378,14 @@ class BreakpointController:
                     "layer_name": item["layer_name"],
                     "position": item["position"],
                     "mutate": item["breakpoint"].mutate,
-                    "callback_key": item["breakpoint"].callback_key,
+                    "callback": item["breakpoint"].callback,
                 }
                 for item in self.breakpoints
             ]
         }
 
     def save(self, path: str, use_torch: bool = True):
-        data = self.export_config()
+        data = self.state_dict()
         if use_torch:
             torch.save(data, path)
         else:
@@ -341,7 +404,7 @@ class BreakpointController:
         Load breakpoint configuration and re-attach hooks to `root`.
 
         strict=True:
-            raise error if a layer name or callback_key cannot be resolved.
+            raise error if a layer name or callback cannot be resolved.
         strict=False:
             skip unresolved entries.
         """
@@ -360,23 +423,21 @@ class BreakpointController:
         skipped = []
 
         for spec in data.get("breakpoints", []):
-            callback_key = spec.get("callback_key")
-            callback = None
+            callback = spec.get("callback", None)
 
-            if callback_key is not None:
-                callback = self.callback_registry.get(callback_key)
-                if callback is None:
-                    msg = f"Callback key '{callback_key}' is not registered."
-                    if strict:
-                        raise ValueError(msg)
-                    skipped.append({"spec": spec, "reason": msg})
-                    continue
+            if callback is None:
+                msg = f"Callback key '{callback}' is not registered."
+                if strict:
+                    raise ValueError(msg)
+                skipped.append({"spec": spec, "reason": msg})
+                continue
 
             bp = Breakpoint(
                 name=spec["name"],
                 callback=callback,
                 mutate=spec.get("mutate", False),
-                callback_key=callback_key,
+                valid=spec.get("valid", False),
+                kwargs=spec.get("kwargs", {})
             )
 
             try:

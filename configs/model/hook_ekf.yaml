@@ -4,12 +4,13 @@ _partial_: True
 expression: ${expression}
 
 recon_bp: reconstructor.0
+controller_cache_path: "data/checkpoints/controller_cache.pth" 
 
 optimizer:
-  _target_: torch.optim.Adam
+  _target_: torch.optim.AdamW
   _partial_: true
-  lr: 0.0005
-  weight_decay: 0.000001
+  lr: 1e-4
+  weight_decay: 1e-5
 
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau

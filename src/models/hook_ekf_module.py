@@ -2,6 +2,8 @@ from typing import Any, Dict, Tuple, Callable
 from collections import defaultdict
 import math
 import numpy as np
+from omegaconf import DictConfig
+import os
 
 import torch
 from torch import nn
@@ -15,9 +17,9 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
-from plugins.sigma_z import GroundTruthSigmaZ
-from plugins.head.ekf_nll_loss import EKFGGDNLLLoss
-from plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
+from src.plugins.sigma_z import GroundTruthSigmaZ
+from src.plugins.head.ekf_nll_loss import EKFGGDNLLLoss
+from src.plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
 
 
 import functools
@@ -54,7 +56,8 @@ class ModelEKFInjectModule(LightningModule):
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
                  expression: str | None = None,
-                 controller: BreakpointController | None = None,
+                 controller: BreakpointController | None | DictConfig | Dict = None,
+                 controller_cache_path: str = "", 
                  compile: bool = False,
                  recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
                  unc_criterion: nn.Module | Callable | None = nn.MSELoss(),
@@ -94,9 +97,7 @@ class ModelEKFInjectModule(LightningModule):
         
         enc1 = self.net.x1_encoder
         enc2 = self.net.x2_encoder
-        reconstructor = self.recon_bp.callback
-        self.recon_fn = make_reconstructor_fn(reconstructor, (1, 1))
-        self.pred_fn = make_predictor_fn(self.net.head)
+        
         sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
         self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
     
@@ -125,6 +126,14 @@ class ModelEKFInjectModule(LightningModule):
             y = torch.as_tensor(y, dtype=self.dtype)
 
         return y.to(self.dtype)
+
+    def configure_model(self):
+        if self.controller is None:
+            self.controller = BreakpointController.load_from_checkpoint(self.net, self.hparams.controller_cache_path)
+        return super().configure_model()
+    
+    def on_fit_start(self):
+        return super().on_fit_start()
         
     def forward(self, x: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
         """
@@ -190,14 +199,16 @@ class ModelEKFInjectModule(LightningModule):
 
         # EKF Propagation
         z = torch.cat(srcs, dim=-1).detach()
+        recon_fn = make_reconstructor_fn(self.recon_bp.callback, (1, 1))
+        pred_fn = make_predictor_fn(self.net.head)
         sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
             z=z, diag_sigma_z=self.diag_sigma_z,
-            reconstructor_fn=self.recon_fn, predictor_fn=self.pred_fn
+            reconstructor_fn=recon_fn, predictor_fn=pred_fn
         )
         ekf_nll = self.unc_criterion(y_true=y, mu_pred=logits, sigma_pred_sq=sigma_pred_sq)
 
         return loss, logits, y, \
-                {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace}, \
+                {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
                 {"var": self.unc_criterion.get_variance(sigma_pred_sq) , "loss": ekf_nll}
     
     def training_step(
@@ -275,7 +286,6 @@ class ModelEKFInjectModule(LightningModule):
                                         optimizer_closure,
                                     )
         
-
     def on_validation_start(self) -> None:
         self.controller.eval()
         # print("Breakpoints are set to evaluation !!!")
@@ -322,63 +332,7 @@ class ModelEKFInjectModule(LightningModule):
                 on_step=True, 
                 on_epoch=True, 
                 prog_bar=True)
-        
-        (x1_orig, x2_orig), y = batch
-        
-        kwargs = dict()
-
-        # 1. BẮT BUỘC: Ép mở lại tính toán gradient trong Validation
-        result = defaultdict(list)
-        with torch.enable_grad():
-            # Tạo bản sao của x1, x2 để không làm hỏng dữ liệu gốc
-            # và bật requires_grad=True để theo dõi gradient
-            x1 = x1_orig.clone().detach().requires_grad_(True)
-            x2 = x2_orig.clone().detach().requires_grad_(True)
-            # Sử dụng loss như 1 thang đo cho OOD
-            # 2. Vòng lặp tấn công PGD (Gradient Ascent)
-            for _ in range(self.hparams.n_jumps):
-                # Xóa gradient cũ (nếu có) trước mỗi bước tính toán
-                if x1.grad is not None: x1.grad.zero_()
-                if x2.grad is not None: x2.grad.zero_()
-                
-                # Forward pass để tính loss
-                loss, logits, _, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
-                signal = recon["trace"].trace["signal"]
-                kwargs["bp_signal"] = signal
-                # Lan truyền ngược để trích xuất gradient
-                loss.mean().backward()
-                # Normalize gradient để trích xuất pha only
-                grad_norm = torch.sqrt(x1.grad ** 2 + x2.grad ** 2)
-                x1_jump = x1.grad / grad_norm
-                x2_jump = x2.grad / grad_norm
-                # Cập nhật vào bảng kết quả để đưa ra callback visualize
-                result["losses"].append(loss.clone().detach())
-                result["positions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
-                result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
-                result["intensities"].append(grad_norm.detach())
-                result["variances"].append(unc["var"].detach())
-                # 3. Cập nhật dữ liệu x1, x2 để TĂNG loss
-                # Thao tác này phải nằm trong no_grad để không bị theo dõi vào đồ thị
-                with torch.no_grad():
-                    # Đẩy lên dốc (Gradient Ascent)
-                    x1_new = x1 + self.hparams.eta * x1_jump # [cite: 92]
-                    x2_new = x2 + self.hparams.eta * x2_jump
-                    
-                    # (Tùy chọn) Thêm bước Projection (cắt tỉa) nếu bạn muốn giới hạn nhiễu epsilon
-                    # x1_new = torch.clamp(x1_new, x1_orig - epsilon, x1_orig + epsilon)
-                    # x2_new = torch.clamp(x2_new, x2_orig - epsilon, x2_orig + epsilon)
-                
-                # Gán lại giá trị và bật requires_grad cho bước lặp tiếp theo
-                x1 = x1_new.requires_grad_(True)
-                x2 = x2_new.requires_grad_(True)
-                y = self._evaluate_expression(x1, x2)
-
-        # 4. Đánh giá lại mô hình trên dữ liệu đã bị tấn công (Adversarial Data)
-        # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường
-        result["bp_signal"] = kwargs["bp_signal"]
-        # Trả result để callback nhận và digest        
-        return result
-        
+        return (loss, logits, recon, unc)
         
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
@@ -481,51 +435,42 @@ class ModelEKFInjectModule(LightningModule):
                     "frequency": 1,
                 },
             }
-        return {"optimizer": optimizer}
+        return {"optimizer": optimizer}      
 
+    def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
+        lit_state_dict: dict = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
+        filtered_dict = {k: v for k, v in lit_state_dict.items() if not k.startswith("recon_bp")}
+        print(list(filtered_dict.keys()))
+        return filtered_dict
+
+    def on_save_checkpoint(self, checkpoint):
+        self.controller.save(self.hparams.controller_cache_path, use_torch=True)
+        pass
+
+    def on_load_checkpoint(self, checkpoint):
+        return super().on_load_checkpoint(checkpoint)
+        
 if __name__ == "__main__":
     import hydra
     from hydra.utils import instantiate
     from omegaconf import OmegaConf, DictConfig
     from functools import partial
  
-    @hydra.main(version_base="1.3", config_path="../../configs", config_name="train.yaml")
+    @hydra.main(version_base="1.3", config_path="../../configs", config_name="train_ekf_hook.yaml")
     def main(cfg: DictConfig) -> None: 
         plugin_cfg = cfg.plugins
         print("Initializing model")
-        model = torch.load(plugin_cfg.model_checkpoint, weights_only=False).cuda()
-        datamodule = instantiate(cfg.data)
-        # print(type(datamodule)
-        datamodule.setup()
-        loader = datamodule.val_dataloader()
-        data = iter(loader)
-        batch = next(data)
-        controller = BreakpointController.__init_dict__(model, plugin_cfg)
+        net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).cuda()
+        net.eval()
+        net.requires_grad_(True)
+        controller = BreakpointController.__init_dict__(net, cfg.plugins)
         controller.cuda()
-        
-        # module = ModelInjectModule(net=model, 
-        #                            recon_bp="reconstructor.0", 
-        #                            unc_bp="uncertainty.0",
-        #                            optimizer=partial(torch.optim.Adam, lr=0.001, weight_decay=0.0),
-        #                            scheduler=partial(torch.optim.lr_scheduler.ReduceLROnPlateau, mode=min, factor=0.1, patience=5),
-        #                            controller=controller,
-        #                            compile=False,
-        #                            recon_criterion= nn.MSELoss(),
-        #                            unc_criterion=BayesCap1DLoss(
-        #                                                         lambda_identity=1.0,
-        #                                                         lambda_nll=0.05,
-        #                                                         identity_mode="l2",   # "l1" to mimic repo
-        #                                                         nll_mode="paper",     # "repo" to mimic repo
-        #                                                     ),
-        #                             epoch_phase=10)
-        module = instantiate(cfg.model)
-        module = module(net=model, controller=controller)
-        loss, logits, y, recon, unc = module.model_step(batch)
-        print(loss)
-        print(logits)
-        print(y)
-        print(recon)
-        print(unc)
+        print(list(Breakpoint.list_of_breakpoints.keys()))
+        # model: LightningModule = hydra.utils.instantiate(cfg.model)
+        # model = model(net = net, controller = controller)
+        # checkpoint = dict()
+        model = LightningModule.load_from_checkpoint(r"logs/train/runs/2026-05-12_18-58-17/checkpoints/epoch_000.ckpt", weights_only=False)
+
     main()
 
     

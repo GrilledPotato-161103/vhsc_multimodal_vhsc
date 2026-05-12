@@ -60,6 +60,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
     net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).cuda()
+    net.eval()
     net.requires_grad_(True)
     controller = BreakpointController.__init_dict__(net, cfg.plugins)
     controller.cuda()

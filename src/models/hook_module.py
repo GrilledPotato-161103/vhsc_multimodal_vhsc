@@ -330,61 +330,7 @@ class ModelInjectModule(LightningModule):
                 on_epoch=True, 
                 prog_bar=True)
         
-        (x1_orig, x2_orig), y = batch
-        
-        kwargs = dict()
-
-        # 1. BẮT BUỘC: Ép mở lại tính toán gradient trong Validation
-        result = defaultdict(list)
-        with torch.enable_grad():
-            # Tạo bản sao của x1, x2 để không làm hỏng dữ liệu gốc
-            # và bật requires_grad=True để theo dõi gradient
-            x1 = x1_orig.clone().detach().requires_grad_(True)
-            x2 = x2_orig.clone().detach().requires_grad_(True)
-            # Sử dụng loss như 1 thang đo cho OOD
-            # 2. Vòng lặp tấn công PGD (Gradient Ascent)
-            for _ in range(self.hparams.n_jumps):
-                # Xóa gradient cũ (nếu có) trước mỗi bước tính toán
-                if x1.grad is not None: x1.grad.zero_()
-                if x2.grad is not None: x2.grad.zero_()
-                
-                # Forward pass để tính loss
-                loss, logits, _, recon, unc = self.model_step(((x1, x2), y), kwargs=kwargs)
-                signal = recon["trace"].trace["signal"]
-                kwargs["bp_signal"] = signal
-                # Lan truyền ngược để trích xuất gradient
-                loss.mean().backward()
-                # Normalize gradient để trích xuất pha only
-                grad_norm = torch.sqrt(x1.grad ** 2 + x2.grad ** 2)
-                x1_jump = x1.grad.sign() / grad_norm
-                x2_jump = x2.grad.sign() / grad_norm
-                # Cập nhật vào bảng kết quả để đưa ra callback visualize
-                result["losses"].append(loss.clone().detach())
-                result["positions"].append(torch.stack([x1.clone().detach(), x2.clone().detach()], axis=1))
-                result["directions"].append(torch.stack([x1_jump.clone().detach(), x2_jump.clone().detach()], axis=1))
-                result["intensities"].append(grad_norm.detach())
-                result["variances"].append(unc["var"].detach())
-                # 3. Cập nhật dữ liệu x1, x2 để TĂNG loss
-                # Thao tác này phải nằm trong no_grad để không bị theo dõi vào đồ thị
-                with torch.no_grad():
-                    # Đẩy lên dốc (Gradient Ascent)
-                    x1_new = x1 + self.hparams.eta * x1_jump # [cite: 92]
-                    x2_new = x2 + self.hparams.eta * x2_jump
-                    
-                    # (Tùy chọn) Thêm bước Projection (cắt tỉa) nếu bạn muốn giới hạn nhiễu epsilon
-                    # x1_new = torch.clamp(x1_new, x1_orig - epsilon, x1_orig + epsilon)
-                    # x2_new = torch.clamp(x2_new, x2_orig - epsilon, x2_orig + epsilon)
-                
-                # Gán lại giá trị và bật requires_grad cho bước lặp tiếp theo
-                x1 = x1_new.requires_grad_(True)
-                x2 = x2_new.requires_grad_(True)
-                y = self._evaluate_expression(x1, x2)
-
-        # 4. Đánh giá lại mô hình trên dữ liệu đã bị tấn công (Adversarial Data)
-        # Giờ x1, x2 đã trở thành dữ liệu xấu, ta tắt grad để đánh giá như bình thường
-        result["bp_signal"] = kwargs["bp_signal"]
-        # Trả result để callback nhận và digest        
-        return result
+        return (loss, logits, recon, unc)
         
         
     def on_validation_epoch_end(self) -> None:
