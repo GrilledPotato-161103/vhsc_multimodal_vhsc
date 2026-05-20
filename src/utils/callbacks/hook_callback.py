@@ -135,7 +135,8 @@ class AdversarialVizCallback(pl.Callback):
         # figs_to_log["val/Loss_Map"] = create_heatmap(loss_smooth, 'inferno')
 
         # --- C. Variance Map ---
-        figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), 'plasma', title="Log Variance Field")
+        figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(np.concatenate([var_smooth, loss_smooth], axis=1) + 1e-6), 
+                                                                  "plasma", title="Log Variance Field")
         figs_to_log["val_plot/Logit_GT_Map"] = create_heatmap(logits_y_grid, 'plasma', title="Logits/GT Field")
         figs_to_log["val_plot/Log_Loss_Map"] = create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', title="Log Loss Field")
 

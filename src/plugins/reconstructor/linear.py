@@ -77,6 +77,19 @@ class BilinearReconstructor(nn.Module):
 
         return cls
     
+    def forward_raw(self, inputs, signal=(1, 1)):
+        # Expect what to do
+        if not self.concat: 
+            (mod_1, mod_2)= inputs
+        else:
+            mod_1, mod_2 = inputs[..., :self.d_1], inputs[..., self.d_1:self.d_1 + self.d_2] 
+        
+        (p1, p2) = signal
+        rec_2 = self.ln12(mod_1) if p1 == 0 else mod_2
+        rec_1 = self.ln21(mod_2) if p2 == 0 else mod_1
+        output = (rec_1, rec_2)
+        return torch.cat(output, dim=-1)
+    
 class LinearReconstructor(nn.Module):
     counter = 0
     def __init__(self, 

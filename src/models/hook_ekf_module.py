@@ -18,9 +18,8 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
 from src.plugins.sigma_z import GroundTruthSigmaZ
-from src.plugins.head.ekf_nll_loss import EKFGGDNLLLoss
+from src.plugins.head.ekf import EKFGGDNLLLoss, EKFBiModalInferer
 from src.plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
-
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
@@ -52,6 +51,7 @@ class HuberLoss(nn.Module):
 class ModelEKFInjectModule(LightningModule):
     def __init__(self,
                  net: nn.Module,
+                 ekf_net: EKFBiModalInferer,
                  recon_bp: str,
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
@@ -65,12 +65,13 @@ class ModelEKFInjectModule(LightningModule):
                  mask_rate: float = 0.3,
                  eta: float = 0.05,
                  n_jumps: int = 8,
-                 sigma_z_mode: str = "mc",
+                 sigma_z_mode: str = "mc"
                  ) -> None:
         super().__init__()
-        self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller"])
+        self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller", "ekf_net"])
         self.net = net
         self.controller = controller
+        self.ekf_net = ekf_net
         self.recon_bp = Breakpoint.get_by_name(recon_bp)
         
         self.train_loss = MeanMetric()
@@ -94,10 +95,12 @@ class ModelEKFInjectModule(LightningModule):
         self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
+
         
         enc1 = self.net.x1_encoder
         enc2 = self.net.x2_encoder
-        
+
+        self.ekf_net = self.ekf_net(self.recon_bp.callback, self.net.head)
         sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
         self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
     
@@ -180,7 +183,7 @@ class ModelEKFInjectModule(LightningModule):
                 bp_signal[mask_index - 1] = 0
         
         self.recon_bp.kwargs = tuple(bp_signal)
-        # print(recon_bp.kwargs)
+        # print(self.recon_bp.kwargs)
         logits = self.forward((x1, x2)).unsqueeze(1)
         loss = self.criterion(logits, y)
         recon_trace = self.recon_bp.trace
@@ -199,17 +202,18 @@ class ModelEKFInjectModule(LightningModule):
 
         # EKF Propagation
         z = torch.cat(srcs, dim=-1).detach()
-        recon_fn = make_reconstructor_fn(self.recon_bp.callback, (1, 1))
-        pred_fn = make_predictor_fn(self.net.head)
-        sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
-            z=z, diag_sigma_z=self.diag_sigma_z,
-            reconstructor_fn=recon_fn, predictor_fn=pred_fn
-        )
-        ekf_nll = self.unc_criterion(y_true=y, mu_pred=logits, sigma_pred_sq=sigma_pred_sq)
+        alpha, beta = self.ekf_net(z, self.diag_sigma_z, signal=sigs)
+        # recon_fn = make_reconstructor_fn(self.recon_bp.callback, (1, 1))
+        # pred_fn = make_predictor_fn(self.net.head)
+        # sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
+        #     z=z, diag_sigma_z=self.diag_sigma_z,
+        #     reconstructor_fn=recon_fn, predictor_fn=pred_fn
+        # )
+        ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, alpha=alpha, beta=beta)
 
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
-                {"var": self.unc_criterion.get_variance(sigma_pred_sq) , "loss": ekf_nll}
+                {"var": bayescap_variance_1d(alpha, beta) , "loss": ekf_nll["loss"]}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -278,6 +282,8 @@ class ModelEKFInjectModule(LightningModule):
                 check_gradient(bp.callback)
             print(f"Checking gradient for Loss's Calibrator  {self.unc_criterion.__class__.__qualname__}")
             check_gradient(self.unc_criterion)
+            print(f"Checking gradient for Loss's Calibrator  {self.ekf_net.__class__.__qualname__}")
+            check_gradient(self.ekf_net)
             
         return super().optimizer_step(
                                         epoch,
@@ -422,7 +428,8 @@ class ModelEKFInjectModule(LightningModule):
 
         # Loss also has learnable calibration params
         parameters += list(self.unc_criterion.parameters())
-
+        parameters += list(self.ekf_net.alpha_net.parameters())
+        parameters += list(self.ekf_net.beta_net.parameters())
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)
@@ -440,7 +447,7 @@ class ModelEKFInjectModule(LightningModule):
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
         lit_state_dict: dict = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
         filtered_dict = {k: v for k, v in lit_state_dict.items() if not k.startswith("recon_bp")}
-        print(list(filtered_dict.keys()))
+        # print(list(filtered_dict.keys()))
         return filtered_dict
 
     def on_save_checkpoint(self, checkpoint):

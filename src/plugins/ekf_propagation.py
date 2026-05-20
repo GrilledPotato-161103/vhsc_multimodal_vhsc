@@ -44,7 +44,7 @@ def propagate_sigma_z_to_sigma_recon(
         diag_sigma_recon: (B, d')
     """
     # What if we
-    print(diag_sigma_z[:5], J_f.mean(dim=(0, 1))[:5])
+    # print(diag_sigma_z[:5], J_f.mean(dim=(0, 1))[:5])
     return (J_f ** 2) @  diag_sigma_z  # (B, d', 32) x (32,) -> (B, d')
 
 
@@ -146,7 +146,6 @@ def full_ekf_propagation(
     # Step 1: Σ_z -> Σ_recon
     J_f = compute_reconstructor_jacobian(reconstructor_fn, z)
     diag_sigma_recon = propagate_sigma_z_to_sigma_recon(J_f, diag_sigma_z)
-
     # Compute reconstructed features
     with torch.no_grad():
         z_recon = vmap(reconstructor_fn)(z)  # (B, d')
@@ -154,5 +153,5 @@ def full_ekf_propagation(
     # Step 2: Σ_recon -> σ²_pred
     J_g = compute_predictor_jacobian(predictor_fn, z_recon)
     sigma_pred_sq = propagate_sigma_recon_to_sigma_pred(J_g, diag_sigma_recon)
-
-    return sigma_pred_sq, diag_sigma_recon, J_f
+    # print(sigma_pred_sq.shape, diag_sigma_recon.shape, J_f.shape, J_g.shape)
+    return sigma_pred_sq, diag_sigma_recon, J_f, J_g

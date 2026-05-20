@@ -2,7 +2,7 @@ _target_: src.data.toy_datamodule.ToyBiModalDataModule
 
 expression: ${expression}
 n_samples: 1280
-batch_size: 64
+batch_size: 8
 num_workers: 12
 
 val_ratio: 0.2

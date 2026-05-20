@@ -1,6 +1,10 @@
 _target_: src.models.hook_ekf_module.ModelEKFInjectModule
 _partial_: True
 
+defaults:
+  - _self_
+  - ekf_net: default
+
 expression: ${expression}
 
 recon_bp: reconstructor.0
@@ -26,9 +30,13 @@ recon_criterion:
   reduction: none
 
 unc_criterion:
-  _target_: src.plugins.head.ekf_nll_loss.EKFGGDNLLLoss
-  eps: 1.0e-8
-  learn_calibration: True
+  _target_: src.plugins.head.bayescap.BayesCap1DLoss
+  reduction: none
+  lambda_identity: 0.
+  lambda_nll: 0.05
+  identity_mode: l2
+  nll_mode: paper
+
 
 epoch_phase: 10
 mask_rate: 0.
