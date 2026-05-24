@@ -206,20 +206,20 @@ class BayesCap1DLoss(nn.Module):
     def _broadcast_uncertainty(
         self,
         mu: Tensor,
-        alpha: Tensor,
+        inv_alpha: Tensor,
         beta: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         # Support scalar uncertainty per sample: [..., 1] -> [..., D]
-        if alpha.shape[-1] == 1 and mu.shape[-1] > 1:
-            alpha = alpha.expand_as(mu)
+        if inv_alpha.shape[-1] == 1 and mu.shape[-1] > 1:
+            inv_alpha = inv_alpha.expand_as(mu)
         if beta.shape[-1] == 1 and mu.shape[-1] > 1:
             beta = beta.expand_as(mu)
-        if alpha.shape != mu.shape or beta.shape != mu.shape:
+        if inv_alpha.shape != mu.shape or beta.shape != mu.shape:
             raise ValueError(
                 f"After broadcasting, expected alpha/beta to match mu shape. "
-                f"Got mu={mu.shape}, alpha={alpha.shape}, beta={beta.shape}"
+                f"Got mu={mu.shape}, alpha={inv_alpha.shape}, beta={beta.shape}"
             )
-        return alpha, beta
+        return inv_alpha, beta
 
     def identity_loss(self, mu: Tensor, y_hat: Tensor) -> Tensor:
         if self.identity_mode == "l2":
@@ -229,38 +229,34 @@ class BayesCap1DLoss(nn.Module):
     def generalized_gaussian_nll(
         self,
         mu: Tensor,
-        alpha: Tensor,
+        inv_alpha: Tensor,
         beta: Tensor,
         y_true: Tensor,
     ) -> Tensor:
-        alpha, beta = self._broadcast_uncertainty(mu, alpha, beta)
-
-        alpha = alpha.clamp_min(self.eps)
+        inv_alpha, beta = self._broadcast_uncertainty(mu, inv_alpha, beta)
+        
+        # In BayesCap code, they predicted inversed alpha instead of alpha, this is a hot fix
+        inv_alpha = inv_alpha.clamp_min(self.eps)
         beta = beta.clamp_min(self.eps)
         abs_err = torch.abs(mu - y_true)
 
         if self.nll_mode == "paper":
             # Exact paper-style expression, using inv_alpha = 1 / alpha
             # (|mu-y| / alpha)^beta = (|mu-y| * inv_alpha)^beta
-            scaled = (abs_err / alpha).clamp(
+            scaled = torch.pow(abs_err * inv_alpha, beta).clamp(
                 min=self.resi_min, max=self.resi_max
-            )
-
-            nll = (
-                torch.pow(scaled, beta)
-                - torch.log(beta / alpha)
-                + torch.lgamma(1.0 / beta)
             )
         else:
             # Repo-compatible simplified form
-            scaled = (abs_err / alpha * beta).clamp(
+            scaled = (abs_err * inv_alpha * beta).clamp(
                 min=self.resi_min, max=self.resi_max
             )
-            nll = (
-                scaled
-                + torch.lgamma(1.0 / beta)
-                - torch.log(beta / alpha)
-            )
+        nll = (
+            scaled
+            - torch.log(beta)
+            - torch.log(inv_alpha)
+            + torch.lgamma(1.0 / beta)
+        )
 
         return self._reduce(nll)
 
@@ -291,10 +287,10 @@ class BayesCap1DLoss(nn.Module):
 # Variance utility
 # -----------------------------
 def bayescap_variance_1d(
-    alpha: Tensor,
+    inv_alpha: Tensor,
     beta: Tensor,
     target_dim: Optional[int] = None,
-    eps: float = 1e-6,
+    eps: float = 1e-4,
 ) -> Tensor:
     """
     Convert BayesCap parameters to predictive variance.
@@ -302,7 +298,7 @@ def bayescap_variance_1d(
     variance = alpha^2 * Gamma(3 / beta) / Gamma(1 / beta)
     where alpha = 1 / inv_alpha
     """
-    alpha = alpha.clamp_min(eps)
+    alpha = (1 / inv_alpha).clamp_min(eps)
     beta = beta.clamp_min(eps)
 
     if target_dim is not None and alpha.shape[-1] == 1 and target_dim > 1:

@@ -19,7 +19,7 @@ def get_normalization(
     name: Optional[Literal["batch", "layer", "group"]], 
     num_features: int,
     dimension: Literal[1, 2, 3] = 1,
-    **kwargs
+    num_groups: int = 3
 ) -> nn.Module:
     """
     Returns a PyTorch normalization module explicitly using a dimension argument.
@@ -35,22 +35,20 @@ def get_normalization(
         
     if name == "batch":
         if dimension == 1:
-            return nn.BatchNorm1d(num_features=num_features, **kwargs)
+            return nn.BatchNorm1d(num_features=num_features)
         elif dimension == 2:
-            return nn.BatchNorm2d(num_features=num_features, **kwargs)
+            return nn.BatchNorm2d(num_features=num_features)
         elif dimension == 3:
-            return nn.BatchNorm3d(num_features=num_features, **kwargs)
+            return nn.BatchNorm3d(num_features=num_features)
         else:
             raise ValueError(f"I'm completely unsure how to create a BatchNorm for dimension {dimension}.")
             
     if name == "layer":
         # LayerNorm takes normalized_shape, which is usually just the feature dimension
-        return nn.LayerNorm(normalized_shape=num_features, **kwargs)
+        return nn.LayerNorm(normalized_shape=num_features)
         
     if name == "group":
-        # GroupNorm requires 'num_groups', defaulting to 32 if not provided in kwargs
-        num_groups = kwargs.pop("num_groups", 32)
-        return nn.GroupNorm(num_groups=num_groups, num_channels=num_features, **kwargs)
+        return nn.GroupNorm(num_groups=num_groups, num_channels=num_features)
     
     return nn.Identity()
 
@@ -72,17 +70,18 @@ class MLP(nn.Module):
         activation: Literal["relu", "gelu", "silu"] = "gelu",
         dropout: float = 0.0,
         norm: str = "layer",
-        residual: bool = False
+        residual: bool = False,
+        **kwargs
     ) -> None:
         super().__init__()
 
         layers: list[nn.Module] = []
         prev_dim = in_dim
-
+        num_groups = kwargs.get('num_groups', 1)
         for h in hidden_dims:
             sub_layers: list[nn.Module] = []
             sub_layers.append(nn.Linear(prev_dim, h))
-            sub_layers.append(get_normalization(norm, num_features=h, dimension=1))
+            sub_layers.append(get_normalization(norm, num_features=h, dimension=1, num_groups=num_groups))
             sub_layers.append(get_activation(activation))
             if dropout > 0:
                 sub_layers.append(nn.Dropout(dropout))

@@ -200,20 +200,14 @@ class ModelEKFInjectModule(LightningModule):
             recon_loss += self.recon_criterion(rec, src)
             recon_unc_loss += self.criterion(dev, dist)
 
-        # EKF Propagation
+        # EKF Propagation Reversed Jacobian = Latent-dim x forwards (I don't know, it just very expensive)
         z = torch.cat(srcs, dim=-1).detach()
-        alpha, beta = self.ekf_net(z, self.diag_sigma_z, signal=sigs)
-        # recon_fn = make_reconstructor_fn(self.recon_bp.callback, (1, 1))
-        # pred_fn = make_predictor_fn(self.net.head)
-        # sigma_pred_sq, diag_sigma_recon, _ = full_ekf_propagation(
-        #     z=z, diag_sigma_z=self.diag_sigma_z,
-        #     reconstructor_fn=recon_fn, predictor_fn=pred_fn
-        # )
-        ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, alpha=alpha, beta=beta)
+        inv_alpha, beta = self.ekf_net(z, self.diag_sigma_z, signal=sigs)
+        ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
 
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
-                {"var": bayescap_variance_1d(alpha, beta) , "loss": ekf_nll["loss"]}
+                {"var": bayescap_variance_1d(inv_alpha, beta) , "loss": ekf_nll["loss"]}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int

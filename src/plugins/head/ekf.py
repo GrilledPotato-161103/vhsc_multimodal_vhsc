@@ -57,12 +57,11 @@ class EKFBiModalInferer(nn.Module):
         # Handle J_f scalar function (B, Src, Dst) -> (B, )
         stem_dim = hidden_dims[0]
         hidden_dim = hidden_dims[-1]
-        alpha_stem = nn.Sequential(
+        inv_alpha_stem = nn.Sequential( 
                                     nn.Linear(latent_size + output_dim, stem_dim, bias=False),
                                     act(),
-                                    nn.BatchNorm1d(stem_dim)
                                 )
-        alpha_blocks = MLP(in_dim=stem_dim,
+        inv_alpha_blocks = MLP(in_dim=stem_dim,
                                 hidden_dims=hidden_dims,
                                 out_dim=hidden_dim,
                                 activation=activation,
@@ -70,16 +69,16 @@ class EKFBiModalInferer(nn.Module):
                                 residual= residual,
                                 dropout=dropout
                                 )
-        alpha_head = nn.Sequential(
+        inv_alpha_head = nn.Sequential(
                                     nn.Linear(hidden_dim, self.output_dim),
                                     nn.ReLU(),
                                 )
-        self.alpha_net = nn.Sequential(alpha_stem, alpha_blocks, alpha_head)
+        self.inv_alpha_net = nn.Sequential(inv_alpha_stem, inv_alpha_blocks, inv_alpha_head)
 
         beta_stem = nn.Sequential(
                                     nn.Linear(latent_size, stem_dim, bias=False),
                                     act(),
-                                    nn.BatchNorm1d(stem_dim)
+                                    nn.LayerNorm(stem_dim)
                                 )
         beta_blocks = MLP(in_dim=stem_dim,
                                 hidden_dims=hidden_dims,
@@ -112,13 +111,15 @@ class EKFBiModalInferer(nn.Module):
                                                                         predictor_fn=pred_fn)
         if len(sigma_pred_sq.shape) < 2:
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
-        S_f = torch.linalg.svdvals(J_f)
+        # J_f = (B, Src, Dst) -> (B, Dst)
+        # Taking eigenvalues as measure for variance, the more exploding they are, the more uniform the shape    
+        S_f = torch.linalg.svdvals(J_f.permute(0, 2, 1))
         # So minus one is to compare the function to Identity Mapping, so...
         # print(S_f.shape, J_f.shape)
-        beta = self.beta_net(S_f - 1)
+        beta = self.beta_net(S_f / torch.amax(S_f, dim=-1, keepdim=True))
         # print(sigma_pred_sq.shape, diag_sigma_recon.shape)
-        alpha =  self.alpha_net(torch.concatenate([sigma_pred_sq, diag_sigma_recon], dim=-1))
-        return alpha, beta
+        inv_alpha =  self.alpha_net(torch.concatenate([sigma_pred_sq, diag_sigma_recon], dim=-1))
+        return inv_alpha, beta
         
 class EKFGGDNLLLoss(nn.Module):
     """Generalized Gaussian NLL where alpha = sqrt(sigma_pred_sq) from EKF chain.
