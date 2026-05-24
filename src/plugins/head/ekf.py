@@ -118,7 +118,7 @@ class EKFBiModalInferer(nn.Module):
         # print(S_f.shape, J_f.shape)
         beta = self.beta_net(S_f / torch.amax(S_f, dim=-1, keepdim=True))
         # print(sigma_pred_sq.shape, diag_sigma_recon.shape)
-        inv_alpha =  self.alpha_net(torch.concatenate([sigma_pred_sq, diag_sigma_recon], dim=-1))
+        inv_alpha =  self.inv_alpha_net(torch.concatenate([sigma_pred_sq, diag_sigma_recon], dim=-1))
         return inv_alpha, beta
         
 class EKFGGDNLLLoss(nn.Module):

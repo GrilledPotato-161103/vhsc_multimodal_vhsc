@@ -263,7 +263,7 @@ class BayesCap1DLoss(nn.Module):
     def forward(
         self,
         mu: Tensor,
-        alpha: Tensor,
+        inv_alpha: Tensor,
         beta: Tensor,
         y_hat: Tensor,
         y_true: Tensor,
@@ -274,7 +274,7 @@ class BayesCap1DLoss(nn.Module):
             )
 
         loss_identity = self.identity_loss(mu, y_hat)
-        loss_nll = self.generalized_gaussian_nll(mu, alpha, beta, y_true)
+        loss_nll = self.generalized_gaussian_nll(mu, inv_alpha, beta, y_true)
         loss = self.lambda_identity * loss_identity + self.lambda_nll * loss_nll
         return {
             "loss": loss,

@@ -422,7 +422,7 @@ class ModelEKFInjectModule(LightningModule):
 
         # Loss also has learnable calibration params
         parameters += list(self.unc_criterion.parameters())
-        parameters += list(self.ekf_net.alpha_net.parameters())
+        parameters += list(self.ekf_net.inv_alpha_net.parameters())
         parameters += list(self.ekf_net.beta_net.parameters())
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
