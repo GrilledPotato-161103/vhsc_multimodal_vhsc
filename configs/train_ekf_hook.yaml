@@ -4,8 +4,8 @@ expression: "((x1**2 - x2**2) / (torch.abs(x1) + torch.abs(x2) + 0.1)) * torch.a
 # order of defaults determines the order in which configs override each other
 defaults:
   - _self_
-  - data: hook
-  - model: hook_ekf
+  - data: hook_manifold
+  - model: hook_ekf_manifold
   - plugins: ekf
   - callbacks: hook
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)

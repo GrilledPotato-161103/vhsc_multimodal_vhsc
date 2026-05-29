@@ -1,7 +1,6 @@
-_target_: src.models.hook_modules.hook.ModelInjectModule
+_target_: src.models.hook_modules.toy.ModelInjectModule
 _partial_: True
 
-expression: ${data.expression}
 
 recon_bp: reconstructor.0
 unc_bp: uncertainty.0

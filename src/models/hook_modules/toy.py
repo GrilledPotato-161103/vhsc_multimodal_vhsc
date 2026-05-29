@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, Callable
+from typing import Any, Dict, Tuple, Callable, Sequence
 from collections import defaultdict
 import math
 import numpy as np
@@ -50,7 +50,6 @@ class ModelInjectModule(LightningModule):
                  unc_bp: str,
                  optimizer: torch.optim.Optimizer,
                  scheduler: torch.optim.lr_scheduler,
-                 expression: str | None = None, 
                  controller: BreakpointController | None = None,
                  compile: bool = False,
                  recon_criterion: nn.Module | Callable | None = nn.MSELoss(),
@@ -90,40 +89,12 @@ class ModelInjectModule(LightningModule):
         self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
-    
-
-    def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-        """
-        Evaluate expression like:
-            'x1**2 + 2*x2 + torch.sin(x1)'
-        in a restricted namespace.
-        """
-        safe_globals = {"__builtins__": {}}
-        safe_locals = {
-            "x1": x1,
-            "x2": x2,
-            "torch": torch,
-            "math": math,
-        } 
-
-        try:
-            y = eval(self.hparams.expression, safe_globals, safe_locals)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to evaluate expression: {self.expression!r}. Error: {e}"
-            ) from e
-
-        if not isinstance(y, torch.Tensor):
-            y = torch.as_tensor(y, dtype=self.dtype)
-
-        return y.to(self.dtype)
         
-    def forward(self, x: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
+    def forward(self, xs: list[torch.Tensor]) -> torch.Tensor:
         """
             Perform forward on hooked model
         """
-        (x1, x2) = x
-        return self.net(x1, x2)
+        return self.net(*xs)
 
     def on_train_start(self):
         # Prevent training on training phase
@@ -145,14 +116,12 @@ class ModelInjectModule(LightningModule):
         # Include bp_kwargs in Dataset for breakpoint manipulation
         self.net.eval()
         self.net.requires_grad_(False)
-        (x1, x2), y = batch
-        x1 = x1.cuda()
-        x2 = x2.cuda()
-        if x1.ndim == 1:
-            x1 = x1.unsqueeze(-1)
-        if x2.ndim == 1:
-            x2 = x2.unsqueeze(-1)
-        y = y.cuda().unsqueeze(1)
+        (x1, x2), y, _ = batch
+        # if x1.ndim == 1:
+        #     x1 = x1.unsqueeze(-1)
+        # if x2.ndim == 1:
+        #     x2 = x2.unsqueeze(-1)
+        # y = y.cuda().unsqueeze(1)
 
         # Set kwargs for breakpoints, use cache if available
         if "bp_signal" in kwargs.keys():

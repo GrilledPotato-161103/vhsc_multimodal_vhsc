@@ -28,8 +28,8 @@ breakpoints:
 sigma_z:
   mode: "jacobian"                    # "mc" | "jacobian"
   n_mc: 5000
-  x_range_train: [-1.0, 1.0]
-  x_range_ood: [-0.6, 1.4]
+  x_range_train: [0.0, 6.2831]
+  x_range_ood: [2.0, 8.2831]
 
 ekf:
   jacobian_mode: "autograd"

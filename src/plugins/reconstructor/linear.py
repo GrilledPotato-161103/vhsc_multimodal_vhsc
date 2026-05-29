@@ -62,7 +62,7 @@ class BilinearReconstructor(nn.Module):
             tail = latent[..., self.d_1 + self.d_2:]
             output = (torch.cat([merged, tail], dim=-1),) 
         dev_1 = self.dev1(torch.cat([rec_1, mod_2], dim=-1))
-        dev_2 = self.dev2(torch.cat([rec_2, mod_1], dim=-1))
+        dev_2 = self.dev2(torch.cat([mod_1, rec_2], dim=-1))
         cls = BreakpointOutput(
                 fn_name=self.forward.__qualname__,
                 context = ctx,

@@ -166,7 +166,8 @@ class ModelEKFManifoldModule(LightningModule):
         self.net.requires_grad_(False)
 
         xs, y, zs = batch
-        y = y.cuda().unsqueeze(1)
+        # xs = [x.unsqueeze(1) for x in xs]
+        # y = y.cuda().unsqueeze(1)
 
         # Set kwargs for breakpoints, use cache if available
         if "bp_signal" in kwargs.keys():
