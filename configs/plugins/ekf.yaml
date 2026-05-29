@@ -25,11 +25,14 @@ breakpoints:
 
 # === EKF Experiment Configuration ===
 
+# SD-setting input-shift covariance provider.
+# Sigma_z(z) = (d_M^2(z; mu_A, Sigma_A) / d_z) * Sigma_A
+# Fitted once at module init on n_source_samples drawn from x_range.
 sigma_z:
-  mode: "jacobian"                    # "mc" | "jacobian"
-  n_mc: 5000
-  x_range_train: [-1.0, 1.0]
-  x_range_ood: [-0.6, 1.4]
+  type: "sd"
+  n_source_samples: 5000              # ablation knob: shrink toward 0 -> SF/B-only regime
+  source_x_range: [-1.0, 1.0]         # range used to draw source samples
+  cov_floor: 1.0e-4
 
 ekf:
   jacobian_mode: "autograd"

@@ -41,4 +41,5 @@ unc_criterion:
 epoch_phase: 10
 mask_rate: 0.
 
-sigma_z_mode: ${plugins.sigma_z.mode}
+source_x_range: ${plugins.sigma_z.source_x_range}
+n_source_samples: ${plugins.sigma_z.n_source_samples}

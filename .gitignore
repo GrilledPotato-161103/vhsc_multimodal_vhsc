@@ -108,6 +108,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+sure_env/
 
 # Spyder project settings
 .spyderproject
@@ -152,3 +153,7 @@ configs/local/default.yaml
 
 # Aim logging
 .aim
+
+# claude
+.claude/
+.omc/

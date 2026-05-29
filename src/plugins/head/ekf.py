@@ -101,14 +101,20 @@ class EKFBiModalInferer(nn.Module):
             return self.reconstructor.forward_raw(z, signal=signal)
         return infer
     
-    def forward(self, z: torch.Tensor, diag_z: torch.Tensor, signal: tuple = (1, 1)): 
+    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, signal: tuple = (1, 1)):
+        """
+        Args:
+            z:       (B, d_z) latent batch
+            sigma_z: (B, d_z, d_z) per-sample input covariance from the Sigma_z provider
+            signal:  (p1, p2) modality-presence tuple
+        """
         assert self.predictor is not None, "Prediction head is None"
         recon_fn = self.get_recon_fn(signal=signal)
         pred_fn = self.predictor.forward
-        sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation(z, 
-                                                                        diag_sigma_z=diag_z, 
-                                                                        reconstructor_fn=recon_fn, 
-                                                                        predictor_fn=pred_fn)
+        sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation_full(z,
+                                                                              sigma_z=sigma_z,
+                                                                              reconstructor_fn=recon_fn,
+                                                                              predictor_fn=pred_fn)
         if len(sigma_pred_sq.shape) < 2:
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
         # J_f = (B, Src, Dst) -> (B, Dst)

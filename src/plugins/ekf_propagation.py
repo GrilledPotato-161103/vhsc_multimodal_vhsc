@@ -155,3 +155,77 @@ def full_ekf_propagation(
     sigma_pred_sq = propagate_sigma_recon_to_sigma_pred(J_g, diag_sigma_recon)
     # print(sigma_pred_sq.shape, diag_sigma_recon.shape, J_f.shape, J_g.shape)
     return sigma_pred_sq, diag_sigma_recon, J_f, J_g
+
+
+# --------------------------------------------------------------------------
+# Full-covariance per-sample EKF — used by the SD-setting Sigma_z provider.
+# --------------------------------------------------------------------------
+
+def propagate_sigma_z_to_sigma_recon_full(
+    J_f: torch.Tensor,
+    sigma_z: torch.Tensor,
+) -> torch.Tensor:
+    """Full EKF step 1: Σ_recon = J_f Σ_z J_f^T.
+
+    Args:
+        J_f:     (B, d', d) reconstructor Jacobian
+        sigma_z: (B, d, d) per-sample input covariance
+
+    Returns:
+        sigma_recon: (B, d', d')
+    """
+    return J_f @ sigma_z @ J_f.transpose(-1, -2)
+
+
+def propagate_sigma_recon_to_sigma_pred_full(
+    J_g: torch.Tensor,
+    sigma_recon: torch.Tensor,
+) -> torch.Tensor:
+    """Full EKF step 2: σ²_pred = J_g^T Σ_recon J_g (scalar quadratic form).
+
+    Args:
+        J_g:         (B, d')
+        sigma_recon: (B, d', d')
+
+    Returns:
+        sigma_pred_sq: (B,)
+    """
+    return torch.einsum("bi,bij,bj->b", J_g, sigma_recon, J_g)
+
+
+def full_ekf_propagation_full(
+    z: torch.Tensor,
+    sigma_z: torch.Tensor,
+    reconstructor_fn: Callable,
+    predictor_fn: Callable,
+    diag_floor: float = 1e-6,
+    pred_floor: float = 1e-8,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """End-to-end EKF with full per-sample input covariance.
+
+    Args:
+        z:        (B, d) latent batch
+        sigma_z:  (B, d, d) per-sample input covariance
+        reconstructor_fn: pure fn (d,) -> (d',)
+        predictor_fn:     fn (B, d') -> (B,)
+
+    Returns:
+        sigma_pred_sq:    (B,)
+        diag_sigma_recon: (B, d')  -- diagonal extracted from full Σ_recon
+        J_f:              (B, d', d)
+        J_g:              (B, d')
+    """
+    from torch.func import vmap
+
+    J_f = compute_reconstructor_jacobian(reconstructor_fn, z)
+    sigma_recon = propagate_sigma_z_to_sigma_recon_full(J_f, sigma_z)
+
+    with torch.no_grad():
+        z_recon = vmap(reconstructor_fn)(z)
+
+    J_g = compute_predictor_jacobian(predictor_fn, z_recon)
+    sigma_pred_sq = propagate_sigma_recon_to_sigma_pred_full(J_g, sigma_recon)
+    sigma_pred_sq = sigma_pred_sq.clamp_min(pred_floor)
+
+    diag_sigma_recon = sigma_recon.diagonal(dim1=-2, dim2=-1).clamp_min(diag_floor)
+    return sigma_pred_sq, diag_sigma_recon, J_f, J_g

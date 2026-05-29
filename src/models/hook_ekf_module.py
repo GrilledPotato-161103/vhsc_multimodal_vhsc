@@ -17,9 +17,9 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
-from src.plugins.sigma_z import GroundTruthSigmaZ
+from src.plugins.sigma_z import SDSigmaZ
 from src.plugins.head.ekf import EKFGGDNLLLoss, EKFBiModalInferer
-from src.plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
+from src.plugins.ekf_propagation import full_ekf_propagation_full, make_reconstructor_fn, make_predictor_fn
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
@@ -65,7 +65,8 @@ class ModelEKFInjectModule(LightningModule):
                  mask_rate: float = 0.3,
                  eta: float = 0.05,
                  n_jumps: int = 8,
-                 sigma_z_mode: str = "mc"
+                 source_x_range: tuple = (-1.0, 1.0),
+                 n_source_samples: int = 5000,
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller", "ekf_net"])
@@ -101,8 +102,16 @@ class ModelEKFInjectModule(LightningModule):
         enc2 = self.net.x2_encoder
 
         self.ekf_net = self.ekf_net(self.recon_bp.callback, self.net.head)
-        sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
-        self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
+        # Per-sample SD-setting input-shift covariance provider.
+        # Fits N(mu_A, Sigma_A) on source latents once at init; computes
+        # Sigma_z(z) = (d_M^2(z) / d_z) * Sigma_A per batch at training time.
+        self.sigma_z_provider = SDSigmaZ(
+            encoder1=enc1,
+            encoder2=enc2,
+            x_range=tuple(source_x_range),
+            n_source_samples=n_source_samples,
+            device="cuda",
+        )
     
     def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
         """
@@ -200,9 +209,11 @@ class ModelEKFInjectModule(LightningModule):
             recon_loss += self.recon_criterion(rec, src)
             recon_unc_loss += self.criterion(dev, dist)
 
-        # EKF Propagation Reversed Jacobian = Latent-dim x forwards (I don't know, it just very expensive)
+        # EKF Propagation. sigma_z is per-sample full covariance from the
+        # SD-setting provider (Mahalanobis-scaled source covariance).
         z = torch.cat(srcs, dim=-1).detach()
-        inv_alpha, beta = self.ekf_net(z, self.diag_sigma_z, signal=sigs)
+        sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
+        inv_alpha, beta = self.ekf_net(z, sigma_z, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
 
         return loss, logits, y, \
