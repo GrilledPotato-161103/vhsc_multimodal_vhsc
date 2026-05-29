@@ -1,0 +1,20 @@
+_target_: src.data.manifold_datamodule.ManifoldDataModule
+
+x_expressions:
+  - "torch.cosh(x[1]) * torch.cos(x[0])"
+  - "torch.cosh(x[1]) * torch.sin(x[0])"
+y_expression: "x[1]"
+n_samples: 128000
+batch_size: 128
+num_workers: 12
+
+val_ratio: 0.1
+test_ratio: 0.1
+
+# [0, 2pi]
+z_range: [0.0, 6.2831]
+z_dim: 2
+
+noise_std: 0.1
+noise_ratio: 0.3
+seed: 42

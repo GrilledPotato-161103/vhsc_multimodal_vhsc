@@ -1,16 +1,20 @@
-_target_: src.models.hook_modules.hook.ModelInjectModule
+_target_: src.models.hook_modules.ekf_manifold.ModelEKFManifoldModule
 _partial_: True
 
-expression: ${data.expression}
+defaults:
+  - _self_
+  - ekf_net: default
+
+expression: ${expression}
 
 recon_bp: reconstructor.0
-unc_bp: uncertainty.0
+controller_cache_path: "data/checkpoints/controller_cache.pth" 
 
 optimizer:
-  _target_: torch.optim.Adam
+  _target_: torch.optim.AdamW
   _partial_: true
-  lr: 0.0005
-  weight_decay: 0.000001
+  lr: 1e-4
+  weight_decay: 1e-5
 
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
@@ -28,10 +32,13 @@ recon_criterion:
 unc_criterion:
   _target_: src.plugins.head.bayescap.BayesCap1DLoss
   reduction: none
-  lambda_identity: 1.0
+  lambda_identity: 0.
   lambda_nll: 0.05
   identity_mode: l2
-  nll_mode: paper
+  nll_mode: repo
+
 
 epoch_phase: 10
 mask_rate: 0.
+
+sigma_z_mode: ${plugins.sigma_z.mode}

@@ -1,4 +1,4 @@
-_target_: src.models.hook_ekf_module.ModelEKFInjectModule
+_target_: src.models.hook_modules.ekf.ModelEKFInjectModule
 _partial_: True
 
 defaults:

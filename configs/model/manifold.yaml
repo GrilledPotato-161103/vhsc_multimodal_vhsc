@@ -1,4 +1,4 @@
-_target_: src.models.modules.toy_module.BiModalLightningModule
+_target_: src.models.modules.manifold_module.ManifoldLightningModule
 
 defaults:
   - _self_
@@ -13,7 +13,7 @@ optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
   lr: 1e-4
-  weight_decay: 1e-5
+  weight_decay: 1e-3
 
 scheduler:
   _target_: torch.optim.lr_scheduler.ReduceLROnPlateau

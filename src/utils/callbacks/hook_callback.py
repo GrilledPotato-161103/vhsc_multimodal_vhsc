@@ -50,8 +50,7 @@ class AdversarialVizCallback(pl.Callback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         # print(len(outputs))
         loss, logits, recon, unc = outputs
-        (x1, x2), y = batch
-        positions = torch.stack((x1, x2), dim=-1)
+        xs, y, positions = batch
         variance = unc['var']
         indices = torch.argsort(loss)
         pcc = pearson_correlation(loss[indices], variance[indices])

@@ -126,7 +126,7 @@ class BiModalEquationDataset(Dataset):
         x1 = self.x1[idx]
         x2 = self.x2[idx]
         y = self.y[idx]
-        return (x1, x2), y
+        return (x1, x2), y, torch.Tensor([x1, x2])
 
 class BPInjectDataset(Dataset):
     def __init__(self,
