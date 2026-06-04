@@ -147,12 +147,11 @@ class ModelEKFInjectModule(LightningModule):
     def on_fit_start(self):
         return super().on_fit_start()
         
-    def forward(self, x: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
+    def forward(self, xs: list[torch.Tensor]) -> torch.Tensor:
         """
             Perform forward on hooked model
         """
-        (x1, x2) = x
-        return self.net(x1, x2)
+        return self.net(*xs)
 
     def on_train_start(self):
         # Prevent training on training phase
@@ -175,10 +174,12 @@ class ModelEKFInjectModule(LightningModule):
         self.net.eval()
         self.net.requires_grad_(False)
 
-        (x1, x2), y = batch
-        x1 = x1.cuda().unsqueeze(1)
-        x2 = x2.cuda().unsqueeze(1)
-        y = y.cuda().unsqueeze(1)
+        xs, y, zs = batch
+        xs = [x.unsqueeze(-1) for x in xs]
+        y = y.unsqueeze(-1)
+        # x1 = x1.cuda().unsqueeze(1)
+        # x2 = x2.cuda().unsqueeze(1)
+        # y = y.cuda().unsqueeze(1)
 
         # Set kwargs for breakpoints, use cache if available
         if "bp_signal" in kwargs.keys():
@@ -193,7 +194,7 @@ class ModelEKFInjectModule(LightningModule):
         
         self.recon_bp.kwargs = tuple(bp_signal)
         # print(self.recon_bp.kwargs)
-        logits = self.forward((x1, x2)).unsqueeze(1)
+        logits = self.forward(xs).unsqueeze(1)
         loss = self.criterion(logits, y)
         recon_trace = self.recon_bp.trace
         sigs = recon_trace.trace["signal"]

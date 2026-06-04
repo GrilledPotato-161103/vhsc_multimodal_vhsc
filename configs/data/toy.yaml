@@ -1,4 +1,4 @@
-_target_: src.data.toy_datamodule.ToyBiModalDataModule
+_target_: src.data.components.dataset.ToyDataset
 
 expression: ${expression}
 n_samples: 128000
