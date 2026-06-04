@@ -61,14 +61,18 @@ def compute_predictor_jacobian(
     Returns:
         J_g: (B, d') gradient vector (scalar output -> Jacobian is a vector)
     """
-    z_recon_g = z_recon.detach().requires_grad_(True)
-    y_pred = predictor_fn(z_recon_g)
-    if y_pred.dim() > 1:
-        y_pred = y_pred.squeeze(-1)  # (B,)
-    # print(y_pred.requires_grad)
-    grads = torch.autograd.grad(
-        y_pred.sum(), z_recon_g, create_graph=True
-    )[0]  # (B, d')
+    # Defensive: re-enable autograd here. Lightning's val/test loops may run
+    # inside torch.no_grad(); the surrounding wrappers in validation_step
+    # / test_step protect model_step, but if anything downstream is in a
+    # no_grad context this restarts a fresh grad-tracked chain.
+    with torch.enable_grad():
+        z_recon_g = z_recon.detach().requires_grad_(True)
+        y_pred = predictor_fn(z_recon_g)
+        if y_pred.dim() > 1:
+            y_pred = y_pred.squeeze(-1)  # (B,)
+        grads = torch.autograd.grad(
+            y_pred.sum(), z_recon_g, create_graph=True
+        )[0]  # (B, d')
     return grads
 
 
@@ -200,6 +204,8 @@ def full_ekf_propagation_full(
     predictor_fn: Callable,
     diag_floor: float = 1e-6,
     pred_floor: float = 1e-8,
+    pred_ceiling: float = 1e4,
+    diag_ceiling: float = 1e4,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """End-to-end EKF with full per-sample input covariance.
 
@@ -225,7 +231,10 @@ def full_ekf_propagation_full(
 
     J_g = compute_predictor_jacobian(predictor_fn, z_recon)
     sigma_pred_sq = propagate_sigma_recon_to_sigma_pred_full(J_g, sigma_recon)
-    sigma_pred_sq = sigma_pred_sq.clamp_min(pred_floor)
+    # Floor AND ceiling: the floor avoids log(0); the ceiling is a structural guard so a
+    # badly-conditioned Sigma_z or an extreme Mahalanobis amplitude can never feed an
+    # astronomically large variance into the heads / NLL / variance map (the original bug).
+    sigma_pred_sq = sigma_pred_sq.clamp(min=pred_floor, max=pred_ceiling)
 
-    diag_sigma_recon = sigma_recon.diagonal(dim1=-2, dim2=-1).clamp_min(diag_floor)
+    diag_sigma_recon = sigma_recon.diagonal(dim1=-2, dim2=-1).clamp(min=diag_floor, max=diag_ceiling)
     return sigma_pred_sq, diag_sigma_recon, J_f, J_g

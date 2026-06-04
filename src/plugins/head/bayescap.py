@@ -299,7 +299,9 @@ def bayescap_variance_1d(
     where alpha = 1 / inv_alpha
     """
     alpha = (1 / inv_alpha).clamp_min(eps)
-    beta = beta.clamp_min(eps)
+    # Clamp beta away from 0: lgamma(1/beta) overflows as beta -> 0, which turned
+    # the predictive-variance map into NaN / e^30 saturation.
+    beta = beta.clamp(min=0.25, max=8.0)
 
     if target_dim is not None and alpha.shape[-1] == 1 and target_dim > 1:
         alpha = alpha.expand(*alpha.shape[:-1], target_dim)

@@ -104,8 +104,10 @@ class AdversarialVizCallback(pl.Callback):
         loss_grid = np.clip(loss_grid, 0, 20)
 
         var_grid = rasterize(variances)
-        var_grid = np.clip(var_grid, 0, 20)
-        var_grid[np.isinf(var_grid)] = 20
+        # NOTE: do not clip at a small ceiling — under OOD or head collapse
+        # the variance can be much larger than 20, and clipping erases all
+        # spatial structure into a uniform ceiling.
+        var_grid = np.nan_to_num(var_grid, nan=0.0, posinf=1e6, neginf=0.0)
 
         # 4. Làm mịn và tính Covariance (Local Covariance)
         # E[L], E[V], E[L*V] thông qua Gaussian filter

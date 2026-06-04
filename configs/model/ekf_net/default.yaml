@@ -10,3 +10,15 @@ activation: silu
 norm: batch
 dropout: 0.5
 residual: true
+
+# "learned" — two-head MLP pipeline (bounded: softplus inv_alpha, sigmoid-squashed beta).
+#             Calibrated predictive variance; this is the real experiment pipeline.
+# "closed_form" — alpha = sqrt(2 sigma_pred_sq), beta = 2 (formalism/02 §3).
+#                  Diagnostic only: isolates the EKF chain (no learnable uncertainty params,
+#                  variance is uninformative here because the latent shift is small).
+mode: "learned"
+
+# Bounds for the learned beta head -> beta in [beta_min, beta_max]. Keeps
+# Gamma(3/beta)/Gamma(1/beta) finite (a collapsing beta caused the variance blow-up).
+beta_min: 0.5
+beta_max: 4.0
