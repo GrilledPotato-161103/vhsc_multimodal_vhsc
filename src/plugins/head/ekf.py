@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 from src.models.components.toy import MLP, Residual, get_normalization
@@ -18,7 +19,7 @@ from src.plugins.var import BreakpointContext, BreakpointOutput
 from src.plugins.ekf_propagation import * 
 
 class EKFBiModalInferer(nn.Module):
-    def __init__(self, 
+    def __init__(self,
                     reconstructor: nn.Module,
                     predictor: nn.Module,
                     latent_dim: 16,
@@ -31,10 +32,15 @@ class EKFBiModalInferer(nn.Module):
                     activation: str = "gelu",
                     norm: str = "batch",
                     eps: float = 1e-6,
-                    residual = False
+                    residual = False,
+                    mode: str = "learned",
+                    beta_min: float = 0.5,
+                    beta_max: float = 4.0,
                     ):
-        # We gonna take 
+        # We gonna take
         super().__init__()
+        self.beta_min = beta_min
+        self.beta_max = beta_max
         if not isinstance(hidden_dims, Sequence):
             hidden_dims = [hidden_dims]
         self.reconstructor = reconstructor
@@ -43,6 +49,9 @@ class EKFBiModalInferer(nn.Module):
         self.per_dim_uncertainty = per_dim_uncertainty
         self.output_dim = output_dim if per_dim_uncertainty else 1
         self.eps = eps
+        if mode not in ("learned", "closed_form"):
+            raise ValueError(f"mode must be 'learned' or 'closed_form', got {mode!r}")
+        self.mode = mode
         bottleneck_dim = bottleneck_dim or hidden_dims[-1]
 
         if activation == "relu":
@@ -69,9 +78,11 @@ class EKFBiModalInferer(nn.Module):
                                 residual= residual,
                                 dropout=dropout
                                 )
+        # No terminal ReLU: a hard 0 makes alpha = 1/inv_alpha blow up to inf.
+        # softplus(+eps) is applied in forward() instead -> inv_alpha is strictly
+        # positive and smooth.
         inv_alpha_head = nn.Sequential(
                                     nn.Linear(hidden_dim, self.output_dim),
-                                    nn.ReLU(),
                                 )
         self.inv_alpha_net = nn.Sequential(inv_alpha_stem, inv_alpha_blocks, inv_alpha_head)
 
@@ -88,9 +99,10 @@ class EKFBiModalInferer(nn.Module):
                                 residual= residual,
                                 dropout=dropout
                                 )
+        # No terminal ReLU: beta -> 0 makes lgamma(1/beta) overflow. Output a raw
+        # logit; forward() squashes it into [beta_min, beta_max] with a sigmoid.
         beta_head = nn.Sequential(
                                     nn.Linear(hidden_dim, self.output_dim),
-                                    nn.ReLU(),
                                 )
 
         self.beta_net = nn.Sequential(beta_stem, beta_blocks, beta_head)
@@ -117,15 +129,23 @@ class EKFBiModalInferer(nn.Module):
                                                                               predictor_fn=pred_fn)
         if len(sigma_pred_sq.shape) < 2:
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
-        # J_f = (B, Src, Dst) -> (B, Dst)
-        # Taking eigenvalues as measure for variance, the more exploding they are, the more uniform the shape    
+
+        if self.mode == "closed_form":
+            # Linear-Gaussian closed form (formalism/02 §3): beta=2, alpha=sqrt(2 sigma_pred_sq).
+            # No learnable parameters in the heads — pure EKF-driven uncertainty.
+            inv_alpha = 1.0 / torch.sqrt(2.0 * sigma_pred_sq + self.eps)
+            beta = torch.full_like(sigma_pred_sq, 2.0)
+            return inv_alpha, beta, sigma_pred_sq
+
+        # mode == "learned" — bounded heads (see __init__ notes).
         S_f = torch.linalg.svdvals(J_f.permute(0, 2, 1))
-        # So minus one is to compare the function to Identity Mapping, so...
-        # print(S_f.shape, J_f.shape)
-        beta = self.beta_net(S_f / torch.amax(S_f, dim=-1, keepdim=True))
-        # print(sigma_pred_sq.shape, diag_sigma_recon.shape)
-        inv_alpha =  self.inv_alpha_net(torch.concatenate([sigma_pred_sq, diag_sigma_recon], dim=-1))
-        return inv_alpha, beta
+        beta_raw = self.beta_net(S_f / torch.amax(S_f, dim=-1, keepdim=True))
+        beta = self.beta_min + (self.beta_max - self.beta_min) * torch.sigmoid(beta_raw)
+        # Feed the EKF variance in log-space so the head sees a well-scaled signal
+        # regardless of whether sigma_pred_sq is 1e-4 or 1e4.
+        ekf_feat = torch.log(torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1).clamp_min(self.eps))
+        inv_alpha = F.softplus(self.inv_alpha_net(ekf_feat)) + self.eps
+        return inv_alpha, beta, sigma_pred_sq
         
 class EKFGGDNLLLoss(nn.Module):
     """Generalized Gaussian NLL where alpha = sqrt(sigma_pred_sq) from EKF chain.

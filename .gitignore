@@ -157,3 +157,6 @@ configs/local/default.yaml
 # claude
 .claude/
 .omc/
+# local aarch64 CPU debug venv (not for commit)
+aenv/
+debug/

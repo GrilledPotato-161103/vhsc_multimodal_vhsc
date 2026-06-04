@@ -33,9 +33,9 @@ unc_criterion:
   _target_: src.plugins.head.bayescap.BayesCap1DLoss
   reduction: none
   lambda_identity: 0.
-  lambda_nll: 0.05
+  lambda_nll: 1.0
   identity_mode: l2
-  nll_mode: repo
+  nll_mode: paper
 
 
 epoch_phase: 10

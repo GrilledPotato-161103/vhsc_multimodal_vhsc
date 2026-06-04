@@ -110,7 +110,7 @@ class ModelEKFInjectModule(LightningModule):
             encoder2=enc2,
             x_range=tuple(source_x_range),
             n_source_samples=n_source_samples,
-            device="cuda",
+            device=("cuda" if torch.cuda.is_available() else "cpu"),
         )
     
     def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
@@ -213,12 +213,12 @@ class ModelEKFInjectModule(LightningModule):
         # SD-setting provider (Mahalanobis-scaled source covariance).
         z = torch.cat(srcs, dim=-1).detach()
         sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
-        inv_alpha, beta = self.ekf_net(z, sigma_z, signal=sigs)
+        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
 
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
-                {"var": bayescap_variance_1d(inv_alpha, beta) , "loss": ekf_nll["loss"]}
+                {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"], "sigma_pred_sq": sigma_pred_sq.detach()}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -260,11 +260,23 @@ class ModelEKFInjectModule(LightningModule):
             unc['loss'] *= 0
         
         self.train_nll(unc["loss"].mean())
-        self.log(f"train/loss_unc_{signal_str}", 
-                self.train_nll, 
-                on_step=True, 
-                on_epoch=True, 
+        self.log(f"train/loss_unc_{signal_str}",
+                self.train_nll,
+                on_step=True,
+                on_epoch=True,
                 prog_bar=True)
+
+        # EKF diagnostics: mean = magnitude, std = per-sample spread.
+        # std ~ 0 means the chain collapses sigma_pred to a constant.
+        sps = unc["sigma_pred_sq"].detach().flatten()
+        self.log(f"train/sigma_pred_sq_mean_{signal_str}", sps.mean(),
+                 on_step=True, on_epoch=True)
+        self.log(f"train/sigma_pred_sq_std_{signal_str}", sps.std(),
+                 on_step=True, on_epoch=True)
+        self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
+                 on_step=True, on_epoch=True)
+        self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
+                 on_step=True, on_epoch=True)
         # return loss or backpropagation will fail, focus on uncertainty loss only
 
         return recon["unc_loss"].mean() + unc['loss'].mean()
@@ -338,11 +350,21 @@ class ModelEKFInjectModule(LightningModule):
         
 
         self.val_nll(unc["loss"].mean())
-        self.log(f"val/loss_unc_{signal_str}", 
-                self.val_nll, 
-                on_step=True, 
-                on_epoch=True, 
+        self.log(f"val/loss_unc_{signal_str}",
+                self.val_nll,
+                on_step=True,
+                on_epoch=True,
                 prog_bar=True)
+
+        sps = unc["sigma_pred_sq"].detach().flatten()
+        self.log(f"val/sigma_pred_sq_mean_{signal_str}", sps.mean(),
+                 on_step=True, on_epoch=True)
+        self.log(f"val/sigma_pred_sq_std_{signal_str}", sps.std(),
+                 on_step=True, on_epoch=True)
+        self.log(f"val/sigma_pred_sq_min_{signal_str}", sps.min(),
+                 on_step=True, on_epoch=True)
+        self.log(f"val/sigma_pred_sq_max_{signal_str}", sps.max(),
+                 on_step=True, on_epoch=True)
         return (loss, logits, recon, unc)
         
     def on_validation_epoch_end(self) -> None:
@@ -377,26 +399,35 @@ class ModelEKFInjectModule(LightningModule):
                  prog_bar=True)
 
         self.test_recon_loss(recon["recon_loss"].mean())
-        self.log(f"train/loss_recon_{signal_str}", 
-                    self.test_recon_loss, 
-                    on_step=False, 
-                    on_epoch=True, 
-                    prog_bar=True)
-        
-        self.test_unc_loss(recon["unc_loss"].mean())
-        self.log(f"test/loss_unc_{signal_str}", 
-                    self.test_unc_loss, 
-                    on_step=True, 
-                    on_epoch=True, 
+        self.log(f"test/loss_recon_{signal_str}",
+                    self.test_recon_loss,
+                    on_step=False,
+                    on_epoch=True,
                     prog_bar=True)
 
-        
+        self.test_unc_loss(recon["unc_loss"].mean())
+        self.log(f"test/loss_recon_unc_{signal_str}",
+                    self.test_unc_loss,
+                    on_step=True,
+                    on_epoch=True,
+                    prog_bar=True)
+
         self.test_nll(unc["loss"].mean())
-        self.log(f"test/loss_unc_{signal_str}", 
-                self.test_nll, 
-                on_step=True, 
-                on_epoch=True, 
+        self.log(f"test/loss_unc_{signal_str}",
+                self.test_nll,
+                on_step=True,
+                on_epoch=True,
                 prog_bar=True)
+
+        sps = unc["sigma_pred_sq"].detach().flatten()
+        self.log(f"test/sigma_pred_sq_mean_{signal_str}", sps.mean(),
+                 on_step=True, on_epoch=True)
+        self.log(f"test/sigma_pred_sq_std_{signal_str}", sps.std(),
+                 on_step=True, on_epoch=True)
+        self.log(f"test/sigma_pred_sq_min_{signal_str}", sps.min(),
+                 on_step=True, on_epoch=True)
+        self.log(f"test/sigma_pred_sq_max_{signal_str}", sps.max(),
+                 on_step=True, on_epoch=True)
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""
@@ -454,6 +485,24 @@ class ModelEKFInjectModule(LightningModule):
         filtered_dict = {k: v for k, v in lit_state_dict.items() if not k.startswith("recon_bp")}
         # print(list(filtered_dict.keys()))
         return filtered_dict
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        """Counterpart to ``state_dict``: tolerate the deliberately-missing
+        ``recon_bp.*`` keys (the breakpoint reconstructor is persisted to
+        ``controller_cache.pth`` separately and restored in ``configure_model``)
+        while keeping strict checks for every other key.
+        """
+        result = super().load_state_dict(state_dict, strict=False, assign=assign)
+        if strict:
+            missing = [k for k in result.missing_keys if not k.startswith("recon_bp")]
+            unexpected = [k for k in result.unexpected_keys if not k.startswith("recon_bp")]
+            if missing or unexpected:
+                raise RuntimeError(
+                    f"Error(s) in loading state_dict for {type(self).__name__}:\n"
+                    f"\tMissing key(s): {missing}\n"
+                    f"\tUnexpected key(s): {unexpected}"
+                )
+        return result
 
     def on_save_checkpoint(self, checkpoint):
         self.controller.save(self.hparams.controller_cache_path, use_torch=True)

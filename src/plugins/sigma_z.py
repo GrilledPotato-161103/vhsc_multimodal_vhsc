@@ -24,26 +24,57 @@ class SDSigmaZ(nn.Module):
                  x_range: tuple = (-1.0, 1.0),
                  n_source_samples: int = 5000,
                  device: str = "cuda",
-                 cov_floor: float = 1e-4):
+                 cov_floor: float = 1e-4,
+                 shrinkage: float = 0.1):
         super().__init__()
         self.x_range = x_range
         self.n_source_samples = n_source_samples
         self.cov_floor = cov_floor
+        self.shrinkage = shrinkage
 
         a, b = x_range
-        x1 = torch.rand(n_source_samples, 1, device=device) * (b - a) + a
-        x2 = torch.rand(n_source_samples, 1, device=device) * (b - a) + a
+        # Deterministic source-sample fit: same mu_A / sigma_A across runs.
+        gen = torch.Generator(device=device).manual_seed(0)
+        x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+        x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+        # Make sure source encoding sees BN in eval mode (running stats only).
+        was_training1, was_training2 = encoder1.training, encoder2.training
+        encoder1.eval(); encoder2.eval()
         with torch.no_grad():
             z1 = encoder1(x1)  # (N, d_z/2)
             z2 = encoder2(x2)  # (N, d_z/2)
+        if was_training1: encoder1.train()
+        if was_training2: encoder2.train()
         z_A = torch.cat([z1, z2], dim=-1)  # (N, d_z)
 
         mu_A = z_A.mean(dim=0)  # (d_z,)
         centered = z_A - mu_A
         sigma_A = (centered.T @ centered) / (n_source_samples - 1)  # (d_z, d_z)
         d_z = mu_A.shape[0]
-        sigma_A = sigma_A + cov_floor * torch.eye(d_z, device=device)
-        sigma_A_inv = torch.linalg.inv(sigma_A)
+        eye = torch.eye(d_z, device=device)
+        # Ledoit-Wolf-style shrinkage toward an isotropic target bounds cond(Sigma_A):
+        # without it lambda_min sits at cov_floor (~1e-4) while lambda_max ~ O(1),
+        # so cond ~ 1e4-1e5 and the Mahalanobis distance is dominated by near-null
+        # directions that do NOT reflect the actual input shift. The shrunk metric is
+        # closer to isotropic, so d_M^2 tracks the real OOD displacement.
+        mean_var = torch.diagonal(sigma_A).mean()
+        sigma_A = (1.0 - shrinkage) * sigma_A + shrinkage * mean_var * eye
+        sigma_A = sigma_A + cov_floor * eye
+        # Symmetric-eigendecomposition inverse (more stable than torch.linalg.inv on
+        # an ill-conditioned matrix).
+        evals, evecs = torch.linalg.eigh(sigma_A)
+        evals = evals.clamp_min(cov_floor)
+        sigma_A_inv = (evecs / evals) @ evecs.T
+
+        # Diagnostic: report Sigma_A eigenvalue spectrum once at init.
+        eigvals = torch.linalg.eigvalsh(sigma_A)
+        print(f"[SDSigmaZ] Sigma_A eigenvalues: "
+              f"min={eigvals.min().item():.3e}  "
+              f"max={eigvals.max().item():.3e}  "
+              f"cond={(eigvals.max() / eigvals.min()).item():.3e}")
+        print(f"[SDSigmaZ] z_A   per-coord var range: "
+              f"min={z_A.var(dim=0).min().item():.3e}  "
+              f"max={z_A.var(dim=0).max().item():.3e}")
 
         self.register_buffer("mu_A", mu_A)
         self.register_buffer("sigma_A", sigma_A)

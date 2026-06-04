@@ -17,3 +17,7 @@ check_val_every_n_epoch: 1
 # set True to to ensure deterministic results
 # makes training slower but gives more reproducibility than just setting seeds
 deterministic: False
+
+# EKF Jacobian (J_g) needs autograd in val/test loops; Lightning's default
+# torch.inference_mode() taints tensors so even enable_grad() cannot revive them.
+inference_mode: False
