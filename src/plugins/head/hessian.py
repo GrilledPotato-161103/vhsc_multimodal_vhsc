@@ -151,8 +151,8 @@ class HessianBiModalInferer(nn.Module):
             recon = functional_call(recon_fn, (recon_params, recon_buffers), z_single)
             pred = functional_call(self.predictor.forward, (pred_params, pred_buffers), recon)
             return pred.squeeze()
-        batched_grad_fn = vmap(jacrev(single_pred))
-        batched_hessian_fn = vmap(hessian(single_pred))
+        batched_grad_fn = vmap(jacrev(single_pred), randomness='same')
+        batched_hessian_fn = vmap(hessian(single_pred), randomness='same')
         return batched_grad_fn, batched_hessian_fn
 
     def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, pred: torch.Tensor, signal: tuple = (1, 1)):

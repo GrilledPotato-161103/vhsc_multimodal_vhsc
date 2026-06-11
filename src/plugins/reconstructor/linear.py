@@ -82,11 +82,12 @@ class BilinearReconstructor(nn.Module):
         if not self.concat: 
             (mod_1, mod_2)= inputs
         else:
-            mod_1, mod_2 = inputs[..., :self.d_1], inputs[..., self.d_1:self.d_1 + self.d_2] 
-        
+            mod_1, mod_2 = inputs[..., :self.d_1].clone(), inputs[..., self.d_1:self.d_1 + self.d_2].clone() 
         (p1, p2) = signal
-        rec_2 = self.ln12(mod_1) if p1 == 0 else mod_2
-        rec_1 = self.ln21(mod_2) if p2 == 0 else mod_1
+        p1_tensor = torch.as_tensor(p1, device=mod_1.device) * torch.ones_like(mod_1)
+        p2_tensor = torch.as_tensor(p2, device=mod_1.device) * torch.ones_like(mod_2)
+        rec_2 = torch.where(p1_tensor == 0, self.ln12(mod_1), mod_2)
+        rec_1 = torch.where(p2_tensor == 0, self.ln21(mod_2), mod_1)
         output = (rec_1, rec_2)
         return torch.cat(output, dim=-1)
     

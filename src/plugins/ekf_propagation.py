@@ -27,7 +27,7 @@ def compute_reconstructor_jacobian(
         J_f: (B, d', 32) batched Jacobians
     """
     from torch.func import jacrev, vmap
-    return vmap(jacrev(reconstructor_fn))(z)
+    return vmap(jacrev(reconstructor_fn), randomness='same')(z)
 
 
 def propagate_sigma_z_to_sigma_recon(
@@ -67,6 +67,7 @@ def compute_predictor_jacobian(
     # no_grad context this restarts a fresh grad-tracked chain.
     with torch.enable_grad():
         z_recon_g = z_recon.detach().requires_grad_(True)
+        print(z_recon_g.shape)
         y_pred = predictor_fn(z_recon_g)
         if y_pred.dim() > 1:
             y_pred = y_pred.squeeze(-1)  # (B,)
@@ -148,11 +149,11 @@ def full_ekf_propagation(
     from torch.func import vmap
 
     # Step 1: Σ_z -> Σ_recon
-    J_f = compute_reconstructor_jacobian(reconstructor_fn, z)
+    J_f = compute_reconstructor_jacobian(reconstructor_fn, z.unsqueeze_(1)).squeeze_()
     diag_sigma_recon = propagate_sigma_z_to_sigma_recon(J_f, diag_sigma_z)
     # Compute reconstructed features
     with torch.no_grad():
-        z_recon = vmap(reconstructor_fn)(z)  # (B, d')
+        z_recon = vmap(reconstructor_fn, randomness='same')(z)  # (B, d')
 
     # Step 2: Σ_recon -> σ²_pred
     J_g = compute_predictor_jacobian(predictor_fn, z_recon)
@@ -223,11 +224,12 @@ def full_ekf_propagation_full(
     """
     from torch.func import vmap
 
-    J_f = compute_reconstructor_jacobian(reconstructor_fn, z)
+    J_f = compute_reconstructor_jacobian(reconstructor_fn, z.unsqueeze(1)).squeeze()
+    print(J_f.shape)
     sigma_recon = propagate_sigma_z_to_sigma_recon_full(J_f, sigma_z)
 
     with torch.no_grad():
-        z_recon = vmap(reconstructor_fn)(z)
+        z_recon = reconstructor_fn(z)
 
     J_g = compute_predictor_jacobian(predictor_fn, z_recon)
     sigma_pred_sq = propagate_sigma_recon_to_sigma_pred_full(J_g, sigma_recon)

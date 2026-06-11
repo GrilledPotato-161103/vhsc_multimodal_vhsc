@@ -8,15 +8,15 @@ def build_activation(name: Optional[str]) -> nn.Module:
 
     name = name.lower()
     if name == "relu":
-        return nn.ReLU()
+        return nn.ReLU(inplace=False)
     if name == "gelu":
-        return nn.GELU()
+        return nn.GELU(inplace=False)
     if name in {"silu", "swish"}:
-        return nn.SiLU()
+        return nn.SiLU(inplace=False)
     if name == "tanh":
-        return nn.Tanh()
+        return nn.Tanh(inplace=False)
     if name == "leaky_relu":
-        return nn.LeakyReLU()
+        return nn.LeakyReLU(inplace=False)
     raise ValueError(f"Unsupported activation: {name}")
 
 
@@ -54,7 +54,7 @@ def get_normalization(
         
     if name == "group":
         # GroupNorm requires 'num_groups', defaulting to 32 if not provided in kwargs
-        num_groups = kwargs.pop("num_groups", 32)
+        num_groups = kwargs.pop("num_groups", 2)
         return nn.GroupNorm(num_groups=num_groups, num_channels=num_features, **kwargs)
     
     return nn.Identity()

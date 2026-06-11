@@ -3,8 +3,8 @@ _partial_: True
 
 defaults:
   - _self_
-  - ekf_net: discrete
-  
+  - ekf_net: default
+
 expression: ${expression}
 
 recon_bp: reconstructor.0
@@ -38,7 +38,7 @@ unc_criterion:
   nll_mode: paper
 
 
-epoch_phase: 20
+epoch_phase: 1
 mask_rate: 0.5
 
 source_x_range: ${plugins.sigma_z.source_x_range}

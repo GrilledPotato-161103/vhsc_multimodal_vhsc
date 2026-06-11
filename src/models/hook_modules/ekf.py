@@ -97,12 +97,13 @@ class ModelEKFInjectModule(LightningModule):
         self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
         self.unc_criterion = unc_criterion
-
+        self.unc_criterion.requires_grad_(True)
         
         enc1 = self.net.x1_encoder
         enc2 = self.net.x2_encoder
 
         self.ekf_net = self.ekf_net(self.recon_bp.callback, self.net.head)
+        self.ekf_net.requires_grad_(True)
         # Per-sample SD-setting input-shift covariance provider.
         # Fits N(mu_A, Sigma_A) on source latents once at init; computes
         # Sigma_z(z) = (d_M^2(z) / d_z) * Sigma_A per batch at training time.
@@ -114,6 +115,8 @@ class ModelEKFInjectModule(LightningModule):
             n_source_samples=n_source_samples,
             device=("cuda" if torch.cuda.is_available() else "cpu"),
         )
+        # Set this to False to control training flow
+        self.automatic_optimization = False
     
     def configure_model(self):
         if self.controller is None:
@@ -132,8 +135,7 @@ class ModelEKFInjectModule(LightningModule):
     def on_train_start(self):
         # Prevent training on training phase
         self.controller.train()
-        # On phase 1, EKFNet is temporarily disabled
-        self.ekf_net.requires_grad_(False)
+        self.ekf_net.train()
         return super().on_train_start()
     
     def on_train_epoch_start(self):
@@ -142,6 +144,8 @@ class ModelEKFInjectModule(LightningModule):
             print("Switching on EKFNet Gradient Propagation")
             self.ekf_net.train()
             self.ekf_net.requires_grad_(True)
+        elif self.current_epoch > self.hparams.epoch_phase:
+            print("EKFNet is training")
         return super().on_train_epoch_start()
     
     def model_step(
@@ -168,14 +172,17 @@ class ModelEKFInjectModule(LightningModule):
         # y = y.cuda().unsqueeze(1)
 
         # Set kwargs for breakpoints, use cache if available
+        
         if "bp_signal" in kwargs.keys():
             bp_signal = kwargs["bp_signal"]
         else:
+            bp_signal = [1, 1]
             mask_index = np.random.choice(3, 1, p= (1 - self.hparams.mask_rate, 
                                                 self.hparams.mask_rate / 2,
                                                 self.hparams.mask_rate / 2))[0]
             if mask_index > 0: 
                 bp_signal[mask_index - 1] = 0
+                xs[mask_index - 1] *= 0
         
         self.recon_bp.kwargs = tuple(bp_signal)
         # print(self.recon_bp.kwargs)
@@ -198,16 +205,62 @@ class ModelEKFInjectModule(LightningModule):
         # EKF Propagation. sigma_z is per-sample full covariance from the
         # SD-setting provider (Mahalanobis-scaled source covariance).
         z = torch.cat(srcs, dim=-1).detach()
+        print(z.shape)
         sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
-        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
-        ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
-
+        mu, inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
+        ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=mu, inv_alpha=inv_alpha, beta=beta)
+    
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
                 {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"], "sigma_pred_sq": sigma_pred_sq.detach()}
     
+    # Changing to manual optimize for freedom in model freeze 
+    def manual_optimize(self, recon, unc, batch_idx): 
+        signal = recon["trace"].trace["signal"]
+        [recon_opt, ekf_opt] = self.optimizers()
+        [recon_scheduler, ekf_scheduler] = self.lr_schedulers()
+
+        # ==== Reconstruction optimize ==== Phase 1
+        if self.current_epoch < self.hparams.epoch_phase:
+            self.toggle_optimizer(recon_opt)
+            recon_opt.zero_grad()
+            recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
+            self.manual_backward(recon_loss, retain_graph=True)
+            if batch_idx == 0:
+                print("Checking reconstructor gradient")
+                for item in self.controller.breakpoints:
+                        pos, bp = item['position'], item["breakpoint"]
+                        print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
+                        check_gradient(bp.callback)
+            recon_opt.step()
+            self.untoggle_optimizer(recon_opt)
+            # Only step the LR Scheduler when its missing a modality 
+            if signal[0] + signal[1] < 2:
+                recon_scheduler.step(recon_loss)
+        else:
+            recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
+        # ==== Uncertainty Optimization ==== Phase 2
+        if self.current_epoch >= self.hparams.epoch_phase:
+            self.toggle_optimizer(ekf_opt)
+            ekf_opt.zero_grad()
+            unc_loss = unc["loss"].mean()
+            print(unc_loss.grad)
+            self.manual_backward(unc_loss)
+            if batch_idx == 0:
+                print("Checking Uncertainty Head Gradient")
+                print(f"Checking gradient for Loss's Calibrator  {self.unc_criterion.__class__.__qualname__}")
+                check_gradient(self.unc_criterion)
+                print(f"Checking gradient for Loss's Calibrator  {self.ekf_net.__class__.__qualname__}")
+                check_gradient(self.ekf_net)
+            ekf_opt.step()
+            ekf_scheduler.step(unc_loss)
+            self.untoggle_optimizer(ekf_opt)
+        else:
+            unc_loss = unc["loss"].mean()
+        return recon_loss, unc_loss
+        
     def training_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
+        self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int,
     ) -> torch.Tensor:
         """Perform a single training step on a batch of data from the training set.
         :param batch: A batch of data (a tuple) containing the input tensor of images and target
@@ -220,6 +273,7 @@ class ModelEKFInjectModule(LightningModule):
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
+        recon_loss, unc_loss = self.manual_optimize(recon, unc, batch_idx=batch_idx)
         self.train_loss(loss.mean())
         self.log(f"train/loss", 
                  self.train_loss, 
@@ -265,6 +319,7 @@ class ModelEKFInjectModule(LightningModule):
             return recon["unc_loss"].mean()+ recon["recon_loss"].mean() + unc['loss'].mean()
         else:
             return recon["unc_loss"].mean() + recon["recon_loss"].mean()
+
     
     def optimizer_step(
         self,
@@ -273,20 +328,6 @@ class ModelEKFInjectModule(LightningModule):
         optimizer,
         optimizer_closure,
     ) -> None:
-        # Only check once
-        if batch_idx == 1 and self.current_epoch == 0:
-            # Check gradient at step
-            print(f"Checking gradient for frozen model {self.net.__class__.__qualname__}")
-            check_gradient(self.net)
-            for item in self.controller.breakpoints:
-                pos, bp = item['position'], item["breakpoint"]
-                print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
-                check_gradient(bp.callback)
-            print(f"Checking gradient for Loss's Calibrator  {self.unc_criterion.__class__.__qualname__}")
-            check_gradient(self.unc_criterion)
-            print(f"Checking gradient for Loss's Calibrator  {self.ekf_net.__class__.__qualname__}")
-            check_gradient(self.ekf_net)
-            
         return super().optimizer_step(
                                         epoch,
                                         batch_idx,
@@ -296,6 +337,7 @@ class ModelEKFInjectModule(LightningModule):
         
     def on_validation_start(self) -> None:
         self.controller.eval()
+        self.ekf_net.eval()
         # print("Breakpoints are set to evaluation !!!")
         super().on_validation_start()
     
@@ -309,7 +351,7 @@ class ModelEKFInjectModule(LightningModule):
         
         # Cached files
         with torch.enable_grad():
-            loss, logits, _, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+            loss, logits, _, recon, unc = self.model_step(batch, bp_signal=(1, 1))
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         self.val_loss(loss)
@@ -441,29 +483,39 @@ class ModelEKFInjectModule(LightningModule):
         :return: A dict containing the configured optimizers and learning-rate schedulers to be used for training.
         """
 
-        parameters = []
+        bp_parameters = []
         for item in self.controller.breakpoints:
             bp = item["breakpoint"]
             print(f"Assigning {bp.name} breakpoints to Optimizer for update")
-            parameters = parameters + list(bp.callback.parameters())
-
+            bp_parameters = bp_parameters + list(bp.callback.parameters())
+        bp_optimizer = self.hparams.optimizer(params=bp_parameters)
         # Loss also has learnable calibration params
-        parameters += list(self.unc_criterion.parameters())
-        parameters += list(self.ekf_net.inv_alpha_net.parameters())
-        parameters += list(self.ekf_net.beta_net.parameters())
-        optimizer = self.hparams.optimizer(params=parameters)
+        ekf_parameters = []
+        ekf_parameters += list(self.unc_criterion.parameters())
+        ekf_parameters += list(self.ekf_net.output_enc.parameters())
+        ekf_parameters += list(self.ekf_net.mu_head.parameters())
+        ekf_parameters += list(self.ekf_net.inv_alpha_net.parameters())
+        ekf_parameters += list(self.ekf_net.beta_net.parameters())
+        ekf_optimizer = self.hparams.optimizer(params=ekf_parameters)
         if self.hparams.scheduler is not None:
-            scheduler = self.hparams.scheduler(optimizer=optimizer)
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "monitor": "val/loss_unc_11",
-                    "interval": "epoch",
-                    "frequency": 1,
-                },
-            }
-        return {"optimizer": optimizer}      
+            bp_scheduler = self.hparams.scheduler(optimizer=bp_optimizer)
+            ekf_scheduler = self.hparams.scheduler(optimizer=ekf_optimizer)
+            # scheduler_template = {
+            #         "scheduler": None,
+            #         "monitor": "val/loss_unc_11",
+            #         "interval": "epoch",
+            #         "frequency": 1,
+            #     }
+            # bp_scheduler = {"scheduler": bp_scheduler,
+            #         "monitor": "val/loss_recon_10",
+            #         "interval": "epoch",
+            #         "frequency": 1,}
+            # ekf_scheduler = {"scheduler": ekf_scheduler,
+            #         "monitor": "val/loss_unc_11",
+            #         "interval": "epoch",
+            #         "frequency": 1,}
+            return [bp_optimizer, ekf_optimizer], [bp_scheduler, ekf_scheduler]
+        return {"optimizer": bp_optimizer}   
 
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
         lit_state_dict: dict = super().state_dict(*args, destination=destination, prefix=prefix, keep_vars=keep_vars)
