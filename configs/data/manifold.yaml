@@ -15,6 +15,9 @@ test_ratio: 0.1
 z_range: [0.0, 6.2831]
 z_dim: 2
 
+z_src_range: [0.0, 6.2831]
+n_src_samples: 512
+
 noise_std: 0.1
 noise_ratio: 0.3
 seed: 42

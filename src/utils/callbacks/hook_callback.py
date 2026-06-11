@@ -49,17 +49,18 @@ class AdversarialVizCallback(pl.Callback):
     
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         # print(len(outputs))
+        if pl_module.current_epoch < pl_module.hparams.epoch_phase:
+            return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
         loss, logits, recon, unc = outputs
         xs, y, positions = batch
         variance = unc['var']
         indices = torch.argsort(loss)
         pcc = pearson_correlation(loss[indices], variance[indices])
-        pl_module.log(f"val/loss_unc_pcc_{pl_module.hparams.eta:.2f}",
+        pl_module.log(f"val/loss_unc_pcc",
                         pcc.item(), 
                         on_step=True,
                         on_epoch=True,
                         prog_bar=False)
-        
         self.positions.append(positions)
         self.losses.append(loss)
         self.variances.append(variance)

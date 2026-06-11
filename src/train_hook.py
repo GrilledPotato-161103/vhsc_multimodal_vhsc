@@ -60,7 +60,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
-
+    datamodule.setup()
     log.info(f"Instantiating model <{cfg.model._target_}>")
     net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).cuda()
     net.eval()
@@ -69,7 +69,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     controller.cuda()
     print(list(Breakpoint.list_of_breakpoints.keys()))
     model: LightningModule = hydra.utils.instantiate(cfg.model)
-    model = model(net = net, controller = controller)
+    model = model(net = net, controller = controller, src_dataset=datamodule.src_dataset)
 
     log.info("Instantiating callbacks...")
     callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))

@@ -8,6 +8,7 @@ import os
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.data import Dataset
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric, MinMetric
 from torchmetrics.classification.accuracy import Accuracy
@@ -17,8 +18,9 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
-from src.plugins.sigma_z import GroundTruthSigmaZ
-from src.plugins.head.ekf import EKFGGDNLLLoss, EKFBiModalInferer
+from src.plugins.sigma_z import SDSigmaZ
+from src.plugins.head.ekf import EKFBiModalInferer
+from src.plugins.head.hessian import *
 from src.plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
 
 import functools
@@ -63,9 +65,8 @@ class ModelEKFManifoldModule(LightningModule):
                  unc_criterion: nn.Module | Callable | None = nn.MSELoss(),
                  epoch_phase: int = 20,
                  mask_rate: float = 0.3,
-                 eta: float = 0.05,
-                 n_jumps: int = 8,
-                 sigma_z_mode: str = "mc"
+                 sigma_z_mode: str = "mc",
+                 src_dataset: Dataset | None = None
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller", "ekf_net"])
@@ -101,34 +102,15 @@ class ModelEKFManifoldModule(LightningModule):
         enc2 = self.net.x2_encoder
 
         self.ekf_net = self.ekf_net(self.recon_bp.callback, self.net.head)
-        sigma_z_provider = GroundTruthSigmaZ(enc1, enc2, x_range=(-1.0, 1.0), mode=sigma_z_mode, device="cuda")
-        self.register_buffer("diag_sigma_z", sigma_z_provider.diag_sigma_z)
-    
-    def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-        """
-        Evaluate expression like:
-            'x1**2 + 2*x2 + torch.sin(x1)'
-        in a restricted namespace.
-        """
-        safe_globals = {"__builtins__": {}}
-        safe_locals = {
-            "x1": x1,
-            "x2": x2,
-            "torch": torch,
-            "math": math,
-        } 
-
-        try:
-            y = eval(self.hparams.expression, safe_globals, safe_locals)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to evaluate expression: {self.expression!r}. Error: {e}"
-            ) from e
-
-        if not isinstance(y, torch.Tensor):
-            y = torch.as_tensor(y, dtype=self.dtype)
-
-        return y.to(self.dtype)
+        # Per-sample SD-setting input-shift covariance provider.
+        # Fits N(mu_A, Sigma_A) on source latents once at init; computes
+        # Sigma_z(z) = (d_M^2(z) / d_z) * Sigma_A per batch at training time.
+        self.sigma_z_provider = SDSigmaZ(
+            encoder1=enc1,
+            encoder2=enc2,
+            dataset=src_dataset,
+            device=("cuda" if torch.cuda.is_available() else "cpu"),
+        )
 
     def configure_model(self):
         if self.controller is None:
@@ -200,12 +182,13 @@ class ModelEKFManifoldModule(LightningModule):
 
         # EKF Propagation Reversed Jacobian = Latent-dim x forwards (I don't know, it just very expensive)
         z = torch.cat(srcs, dim=-1).detach()
-        inv_alpha, beta = self.ekf_net(z, self.diag_sigma_z, signal=sigs)
+        sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
+        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
 
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
-                {"var": bayescap_variance_1d(inv_alpha, beta) , "loss": ekf_nll["loss"]}
+                {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"], "sigma_pred_sq": sigma_pred_sq.detach()}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -252,6 +235,19 @@ class ModelEKFManifoldModule(LightningModule):
                 on_step=True, 
                 on_epoch=True, 
                 prog_bar=True)
+        # return loss or backpropagation will fail, focus on uncertainty loss only
+
+        # EKF diagnostics: mean = magnitude, std = per-sample spread.
+        # std ~ 0 means the chain collapses sigma_pred to a constant.
+        sps = unc["sigma_pred_sq"].detach().flatten()
+        self.log(f"train/sigma_pred_sq_mean_{signal_str}", sps.mean(),
+                 on_step=True, on_epoch=True)
+        self.log(f"train/sigma_pred_sq_std_{signal_str}", sps.std(),
+                 on_step=True, on_epoch=True)
+        self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
+                 on_step=True, on_epoch=True)
+        self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
+                 on_step=True, on_epoch=True)
         # return loss or backpropagation will fail, focus on uncertainty loss only
 
         return recon["unc_loss"].mean() + unc['loss'].mean()

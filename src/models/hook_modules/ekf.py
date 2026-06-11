@@ -8,6 +8,7 @@ import os
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.data import Dataset
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric, MinMetric
 from torchmetrics.classification.accuracy import Accuracy
@@ -18,7 +19,8 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
 from src.plugins.sigma_z import SDSigmaZ
-from src.plugins.head.ekf import EKFGGDNLLLoss, EKFBiModalInferer
+from src.plugins.head.ekf import EKFBiModalInferer
+from src.plugins.head.hessian import *
 from src.plugins.ekf_propagation import full_ekf_propagation_full, make_reconstructor_fn, make_predictor_fn
 
 import functools
@@ -63,10 +65,9 @@ class ModelEKFInjectModule(LightningModule):
                  unc_criterion: nn.Module | Callable | None = nn.MSELoss(),
                  epoch_phase: int = 20,
                  mask_rate: float = 0.3,
-                 eta: float = 0.05,
-                 n_jumps: int = 8,
                  source_x_range: tuple = (-1.0, 1.0),
                  n_source_samples: int = 5000,
+                 src_dataset: Dataset | None = None,
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller", "ekf_net"])
@@ -108,37 +109,12 @@ class ModelEKFInjectModule(LightningModule):
         self.sigma_z_provider = SDSigmaZ(
             encoder1=enc1,
             encoder2=enc2,
+            dataset=src_dataset,
             x_range=tuple(source_x_range),
             n_source_samples=n_source_samples,
             device=("cuda" if torch.cuda.is_available() else "cpu"),
         )
     
-    def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-        """
-        Evaluate expression like:
-            'x1**2 + 2*x2 + torch.sin(x1)'
-        in a restricted namespace.
-        """
-        safe_globals = {"__builtins__": {}}
-        safe_locals = {
-            "x1": x1,
-            "x2": x2,
-            "torch": torch,
-            "math": math,
-        } 
-
-        try:
-            y = eval(self.hparams.expression, safe_globals, safe_locals)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to evaluate expression: {self.expression!r}. Error: {e}"
-            ) from e
-
-        if not isinstance(y, torch.Tensor):
-            y = torch.as_tensor(y, dtype=self.dtype)
-
-        return y.to(self.dtype)
-
     def configure_model(self):
         if self.controller is None:
             self.controller = BreakpointController.load_from_checkpoint(self.net, self.hparams.controller_cache_path)
@@ -156,7 +132,17 @@ class ModelEKFInjectModule(LightningModule):
     def on_train_start(self):
         # Prevent training on training phase
         self.controller.train()
+        # On phase 1, EKFNet is temporarily disabled
+        self.ekf_net.requires_grad_(False)
         return super().on_train_start()
+    
+    def on_train_epoch_start(self):
+        # Turn EKFNet gradient on at phase 2.
+        if self.current_epoch == self.hparams.epoch_phase:
+            print("Switching on EKFNet Gradient Propagation")
+            self.ekf_net.train()
+            self.ekf_net.requires_grad_(True)
+        return super().on_train_epoch_start()
     
     def model_step(
         self, batch, **kwargs
@@ -188,7 +174,6 @@ class ModelEKFInjectModule(LightningModule):
             mask_index = np.random.choice(3, 1, p= (1 - self.hparams.mask_rate, 
                                                 self.hparams.mask_rate / 2,
                                                 self.hparams.mask_rate / 2))[0]
-            bp_signal = [1, 1]
             if mask_index > 0: 
                 bp_signal[mask_index - 1] = 0
         
@@ -214,7 +199,7 @@ class ModelEKFInjectModule(LightningModule):
         # SD-setting provider (Mahalanobis-scaled source covariance).
         z = torch.cat(srcs, dim=-1).detach()
         sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
-        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, signal=sigs)
+        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
 
         return loss, logits, y, \
@@ -231,7 +216,7 @@ class ModelEKFInjectModule(LightningModule):
         :return: A tensor of losses between model predictions and targets.
         """
         # Tạm thời tắt reconstruction để đánh giá uncertainty
-        loss, logits, y, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+        loss, logits, y, recon, unc = self.model_step(batch)
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics
@@ -257,30 +242,29 @@ class ModelEKFInjectModule(LightningModule):
                     prog_bar=True)
 
         # Phase 1: Not propagating uncertainty of deficit inputs
-        if self.current_epoch < self.hparams.epoch_phase and sum(signal) < 2:
-            unc['loss'] *= 0
-        
-        self.train_nll(unc["loss"].mean())
-        self.log(f"train/loss_unc_{signal_str}",
-                self.train_nll,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True)
+        if self.current_epoch >= self.hparams.epoch_phase:
+            self.train_nll(unc["loss"].mean())
+            self.log(f"train/loss_unc_{signal_str}",
+                    self.train_nll,
+                    on_step=True,
+                    on_epoch=True,
+                    prog_bar=True)
 
-        # EKF diagnostics: mean = magnitude, std = per-sample spread.
-        # std ~ 0 means the chain collapses sigma_pred to a constant.
-        sps = unc["sigma_pred_sq"].detach().flatten()
-        self.log(f"train/sigma_pred_sq_mean_{signal_str}", sps.mean(),
-                 on_step=True, on_epoch=True)
-        self.log(f"train/sigma_pred_sq_std_{signal_str}", sps.std(),
-                 on_step=True, on_epoch=True)
-        self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
-                 on_step=True, on_epoch=True)
-        self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
-                 on_step=True, on_epoch=True)
-        # return loss or backpropagation will fail, focus on uncertainty loss only
-
-        return recon["unc_loss"].mean() + unc['loss'].mean()
+            # EKF diagnostics: mean = magnitude, std = per-sample spread.
+            # std ~ 0 means the chain collapses sigma_pred to a constant.
+            sps = unc["sigma_pred_sq"].detach().flatten()
+            self.log(f"train/sigma_pred_sq_mean_{signal_str}", sps.mean(),
+                    on_step=True, on_epoch=True)
+            self.log(f"train/sigma_pred_sq_std_{signal_str}", sps.std(),
+                    on_step=True, on_epoch=True)
+            self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
+                    on_step=True, on_epoch=True)
+            self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
+                    on_step=True, on_epoch=True)
+            # return loss or backpropagation will fail, focus on uncertainty loss only
+            return recon["unc_loss"].mean()+ recon["recon_loss"].mean() + unc['loss'].mean()
+        else:
+            return recon["unc_loss"].mean() + recon["recon_loss"].mean()
     
     def optimizer_step(
         self,
@@ -349,23 +333,23 @@ class ModelEKFInjectModule(LightningModule):
                     on_epoch=True, 
                     prog_bar=True)
         
+        if self.current_epoch >= self.hparams.epoch_phase:
+            self.val_nll(unc["loss"].mean())
+            self.log(f"val/loss_unc_{signal_str}",
+                    self.val_nll,
+                    on_step=True,
+                    on_epoch=True,
+                    prog_bar=True)
 
-        self.val_nll(unc["loss"].mean())
-        self.log(f"val/loss_unc_{signal_str}",
-                self.val_nll,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True)
-
-        sps = unc["sigma_pred_sq"].detach().flatten()
-        self.log(f"val/sigma_pred_sq_mean_{signal_str}", sps.mean(),
-                 on_step=True, on_epoch=True)
-        self.log(f"val/sigma_pred_sq_std_{signal_str}", sps.std(),
-                 on_step=True, on_epoch=True)
-        self.log(f"val/sigma_pred_sq_min_{signal_str}", sps.min(),
-                 on_step=True, on_epoch=True)
-        self.log(f"val/sigma_pred_sq_max_{signal_str}", sps.max(),
-                 on_step=True, on_epoch=True)
+            sps = unc["sigma_pred_sq"].detach().flatten()
+            self.log(f"val/sigma_pred_sq_mean_{signal_str}", sps.mean(),
+                    on_step=True, on_epoch=True)
+            self.log(f"val/sigma_pred_sq_std_{signal_str}", sps.std(),
+                    on_step=True, on_epoch=True)
+            self.log(f"val/sigma_pred_sq_min_{signal_str}", sps.min(),
+                    on_step=True, on_epoch=True)
+            self.log(f"val/sigma_pred_sq_max_{signal_str}", sps.max(),
+                    on_step=True, on_epoch=True)
         return (loss, logits, recon, unc)
         
     def on_validation_epoch_end(self) -> None:

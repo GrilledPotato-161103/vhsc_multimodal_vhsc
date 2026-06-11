@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.func import jacrev
-
+from torch.utils.data import Dataset
 
 class SDSigmaZ(nn.Module):
     """Source-dependent input-shift covariance provider (Option B in the formalism).
@@ -21,6 +21,7 @@ class SDSigmaZ(nn.Module):
     def __init__(self,
                  encoder1: nn.Module,
                  encoder2: nn.Module,
+                 dataset: Dataset | None = None,
                  x_range: tuple = (-1.0, 1.0),
                  n_source_samples: int = 5000,
                  device: str = "cuda",
@@ -34,17 +35,19 @@ class SDSigmaZ(nn.Module):
 
         a, b = x_range
         # Deterministic source-sample fit: same mu_A / sigma_A across runs.
-        gen = torch.Generator(device=device).manual_seed(0)
-        x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
-        x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
-        # Make sure source encoding sees BN in eval mode (running stats only).
-        was_training1, was_training2 = encoder1.training, encoder2.training
-        encoder1.eval(); encoder2.eval()
+        if not dataset:
+            gen = torch.Generator(device=device).manual_seed(0)
+            x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+            x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+            # Pretrained backend always in eval() mode
+        else:
+            xss = [dataset[idx][0] for idx in range(len(dataset))]
+            x1 = torch.tensor([xs[0] for xs in xss], device=device).unsqueeze_(-1)
+            x2 = torch.tensor([xs[1] for xs in xss], device=device).unsqueeze_(-1)
+
         with torch.no_grad():
             z1 = encoder1(x1)  # (N, d_z/2)
             z2 = encoder2(x2)  # (N, d_z/2)
-        if was_training1: encoder1.train()
-        if was_training2: encoder2.train()
         z_A = torch.cat([z1, z2], dim=-1)  # (N, d_z)
 
         mu_A = z_A.mean(dim=0)  # (d_z,)

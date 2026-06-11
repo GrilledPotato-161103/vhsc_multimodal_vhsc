@@ -32,11 +32,13 @@ class ManifoldDataModule(L.LightningDataModule):
         x_expressions: Sequence[str],
         y_expression: str,
         n_samples: int = 10000,
+        n_src_samples: int = 512,
         batch_size: int = 64,
         num_workers: int = 0,
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         z_range: Tuple[float, float] = (-1.0, 1.0),
+        z_src_range: Tuple[float, float] = (-1.0, 1.0),
         z_dim: int = 2,
         noise_std: float = 0.0,
         noise_ratio: float = 0.5,
@@ -74,7 +76,18 @@ class ManifoldDataModule(L.LightningDataModule):
                 "val_ratio + test_ratio < 1."
             )
         generator = torch.Generator().manual_seed(self.hparams.seed)
-
+        self.src_dataset = ManifoldToyDataset(  n_samples=self.hparams.n_src_samples,
+                                                x_expressions=self.hparams.x_expressions,
+                                                y_expression=self.hparams.y_expression,
+                                                z_range=self.hparams.z_src_range,
+                                                z_dim=self.hparams.z_dim,
+                                                noise_std=self.hparams.noise_std,
+                                                noise_ratio=self.hparams.noise_ratio,
+                                                generator=generator,
+                                                seed=self.hparams.seed,
+                                                sampling="uniform"
+                                            )
+        
         self.train_dataset = ManifoldToyDataset(
                                                     n_samples=n_train,
                                                     x_expressions=self.hparams.x_expressions,
@@ -88,17 +101,17 @@ class ManifoldDataModule(L.LightningDataModule):
                                                     sampling="uniform"
                                                     )
         self.val_dataset = ManifoldToyDataset(
-                                                    n_samples=n_train,
-                                                    x_expressions=self.hparams.x_expressions,
-                                                    y_expression=self.hparams.y_expression,
-                                                    z_range=self.hparams.z_range,
-                                                    z_dim=self.hparams.z_dim,
-                                                    noise_std=0.,
-                                                    noise_ratio=0.,
-                                                    generator=generator,
-                                                    seed=self.hparams.seed,
-                                                    sampling="uniform"
-                                                    )
+                                                n_samples=n_train,
+                                                x_expressions=self.hparams.x_expressions,
+                                                y_expression=self.hparams.y_expression,
+                                                z_range=self.hparams.z_range,
+                                                z_dim=self.hparams.z_dim,
+                                                noise_std=0.,
+                                                noise_ratio=0.,
+                                                generator=generator,
+                                                seed=self.hparams.seed,
+                                                sampling="uniform"
+                                                )
 
         self.test_dataset = ManifoldToyDataset(
                                                     n_samples=n_train,

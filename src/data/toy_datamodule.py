@@ -47,12 +47,15 @@ class ToyBiModalDataModule(L.LightningDataModule):
         self,
         expression: str,
         n_samples: int = 10000,
+        n_src_samples: int = 1028,
         batch_size: int = 64,
         num_workers: int = 0,
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         x1_range: Tuple[float, float] = (-1.0, 1.0),
         x2_range: Tuple[float, float] = (-1.0, 1.0),
+        x1_src_range: Tuple[float, float] = (-1.0, 1.0),
+        x2_src_range: Tuple[float, float] = (-1.0, 1.0),
         noise_std: float = 0.0,
         noise_ratio: float = 0.5,
         seed: int = 42,
@@ -90,6 +93,18 @@ class ToyBiModalDataModule(L.LightningDataModule):
             )
         generator = torch.Generator().manual_seed(self.hparams.seed)
 
+        self.src_dataset = ToyDataset(
+                                        n_samples=self.hparams.n_src_samples,
+                                        expression=self.hparams.expression,
+                                        x1_range=self.hparams.x1_src_range,
+                                        x2_range=self.hparams.x2_src_range,
+                                        noise_std=self.hparams.noise_std,
+                                        noise_ratio=self.hparams.noise_ratio,
+                                        generator=generator,
+                                        seed=self.hparams.seed,
+                                        sampling="normal"
+                                        )
+        
         self.train_dataset = ToyDataset(
                                         n_samples=n_train,
                                         expression=self.hparams.expression,

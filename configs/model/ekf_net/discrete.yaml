@@ -1,4 +1,4 @@
-_target_: src.plugins.head.ekf.EKFBiModalInferer
+_target_: src.plugins.head.hessian.DiscreteHessianBiModalInferer
 _partial_: True
 
 latent_dim: 16

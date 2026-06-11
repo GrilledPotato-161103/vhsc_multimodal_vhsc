@@ -24,6 +24,7 @@ class EKFBiModalInferer(nn.Module):
                     predictor: nn.Module,
                     latent_dim: 16,
                     n_modals:int = 2,
+                    pred_dim: int = 1,
                     output_dim: int  =  1,
                     hidden_dims:  Sequence | List | int = 256,
                     bottleneck_dim: int | None = None,
@@ -41,6 +42,7 @@ class EKFBiModalInferer(nn.Module):
         super().__init__()
         self.beta_min = beta_min
         self.beta_max = beta_max
+        self.pred_dim = pred_dim
         if not isinstance(hidden_dims, Sequence):
             hidden_dims = [hidden_dims]
         self.reconstructor = reconstructor
@@ -66,6 +68,27 @@ class EKFBiModalInferer(nn.Module):
         # Handle J_f scalar function (B, Src, Dst) -> (B, )
         stem_dim = hidden_dims[0]
         hidden_dim = hidden_dims[-1]
+        hidden_dims = hidden_dims[1:-1]
+        # Output encoders to sync mu head
+        output_enc_stem = nn.Sequential(
+            nn.Linear(self.pred_dim, stem_dim),
+            act(),
+        )
+        if len(hidden_dims) > 0: 
+            output_enc_blocks = MLP(in_dim=stem_dim,
+                                hidden_dims=hidden_dims,
+                                out_dim=hidden_dim,
+                                activation=activation,
+                                norm = norm,
+                                residual= True,
+                                dropout=dropout
+                                )
+        else:
+            output_enc_blocks = nn.Identity()
+        self.output_enc = nn.Sequential(output_enc_stem, output_enc_blocks)
+        # Mu head
+        self.mu_head = nn.Linear(hidden_dim, self.pred_dim)
+
         inv_alpha_stem = nn.Sequential( 
                                     nn.Linear(latent_size + output_dim, stem_dim, bias=False),
                                     act(),
@@ -113,7 +136,7 @@ class EKFBiModalInferer(nn.Module):
             return self.reconstructor.forward_raw(z, signal=signal)
         return infer
     
-    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, signal: tuple = (1, 1)):
+    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, pred: torch.Tensor, signal: tuple = (1, 1)):
         """
         Args:
             z:       (B, d_z) latent batch
@@ -139,84 +162,13 @@ class EKFBiModalInferer(nn.Module):
 
         # mode == "learned" — bounded heads (see __init__ notes).
         S_f = torch.linalg.svdvals(J_f.permute(0, 2, 1))
+        output_latent = self.output_enc(pred)
         beta_raw = self.beta_net(S_f / torch.amax(S_f, dim=-1, keepdim=True))
         beta = self.beta_min + (self.beta_max - self.beta_min) * torch.sigmoid(beta_raw)
         # Feed the EKF variance in log-space so the head sees a well-scaled signal
         # regardless of whether sigma_pred_sq is 1e-4 or 1e4.
         ekf_feat = torch.log(torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1).clamp_min(self.eps))
         inv_alpha = F.softplus(self.inv_alpha_net(ekf_feat)) + self.eps
-        return inv_alpha, beta, sigma_pred_sq
+        mu = self.mu_head(output_latent)
+        return mu, inv_alpha, beta, sigma_pred_sq
         
-class EKFGGDNLLLoss(nn.Module):
-    """Generalized Gaussian NLL where alpha = sqrt(sigma_pred_sq) from EKF chain.
-
-    The existing BayesCap1D neural head is NOT used here; alpha is sourced
-    directly from the EKF Jacobian propagation. beta is the only learned parameter.
-    """
-
-    def __init__(self, eps: float = 1e-8, learn_calibration: bool = False):
-        """
-        Args:
-            eps: numerical floor for alpha to prevent log(0)
-            learn_calibration: if True, learn affine (a, b) s.t. alpha = a*sqrt(sigma) + b
-        """
-        super().__init__()
-        # log_beta initialized to 0.5 -> beta = exp(0.5) ~ 1.65 (between Laplace and Gaussian)
-        self.log_beta = nn.Parameter(torch.tensor(0.5))
-        self.eps = eps
-        self.learn_calibration = learn_calibration
-        if learn_calibration:
-            self.log_a = nn.Parameter(torch.tensor(0.0))  # a = 1.0
-            self.b = nn.Parameter(torch.tensor(0.0))       # b = 0.0
-
-    def forward(
-        self,
-        y_true: torch.Tensor,
-        mu_pred: torch.Tensor,
-        sigma_pred_sq: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            y_true: (B,) or (B, 1) ground-truth targets
-            mu_pred: (B,) or (B, 1) point predictions from frozen model
-            sigma_pred_sq: (B,) EKF-propagated predictive variance
-
-        Returns:
-            Scalar mean NLL loss
-        """
-        y_true = y_true.squeeze()
-        mu_pred = mu_pred.squeeze()
-        beta = torch.exp(self.log_beta)
-
-        if self.learn_calibration:
-            a = torch.exp(self.log_a)
-            alpha = a * torch.sqrt(sigma_pred_sq + self.eps) + self.b
-        else:
-            alpha = torch.sqrt(sigma_pred_sq + self.eps)
-
-        alpha = alpha.clamp(min=self.eps)
-        residual = torch.abs(y_true - mu_pred)
-        nll = (
-            (residual / alpha) ** beta
-            + torch.log(alpha)
-            + torch.lgamma(1.0 / beta)
-            - torch.log(beta)
-        )
-        return nll.mean()
-
-    def extra_repr(self) -> str:
-        return (f"beta={torch.exp(self.log_beta).item():.3f}, "
-                f"learn_calibration={self.learn_calibration}")
-
-    def get_variance(self, sigma_pred_sq):
-        beta = torch.exp(self.log_beta)
-
-        if self.learn_calibration:
-            a = torch.exp(self.log_a)
-            alpha = a * torch.sqrt(sigma_pred_sq + self.eps) + self.b
-        else:
-            alpha = torch.sqrt(sigma_pred_sq + self.eps)
-
-        alpha = alpha.clamp(min=self.eps)
-
-        return alpha.pow(2) * torch.exp(torch.lgamma(3 / beta) - torch.lgamma(1 / beta))
