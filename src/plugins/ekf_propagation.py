@@ -67,7 +67,7 @@ def compute_predictor_jacobian(
     # no_grad context this restarts a fresh grad-tracked chain.
     with torch.enable_grad():
         z_recon_g = z_recon.detach().requires_grad_(True)
-        print(z_recon_g.shape)
+        # print(z_recon_g.shape)
         y_pred = predictor_fn(z_recon_g)
         if y_pred.dim() > 1:
             y_pred = y_pred.squeeze(-1)  # (B,)
@@ -225,7 +225,7 @@ def full_ekf_propagation_full(
     from torch.func import vmap
 
     J_f = compute_reconstructor_jacobian(reconstructor_fn, z.unsqueeze(1)).squeeze()
-    print(J_f.shape)
+    # print(J_f.shape)
     sigma_recon = propagate_sigma_z_to_sigma_recon_full(J_f, sigma_z)
 
     with torch.no_grad():

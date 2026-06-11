@@ -366,7 +366,7 @@ class DiscreteHessianBiModalInferer(nn.Module):
         # v_principal shape: (B, hidden_dim)
         # Var_dir = v^T * Sigma_z * v
         J_global = (pred_plus - pred_minus) / (2 * self.eps) * v_principal
-        sigma_pred_sq = torch.einsum("bi,bij,bj->b", J_global, sigma_z, J_global)
+        sigma_pred_sq = torch.einsum("bi,bij,bj->b", J_global, sigma_z, J_global).unsqueeze(-1)
         # sigma_pred_sq = torch.bmm(J_global.unsqueeze(1), torch.bmm(sigma_z, J_global.unsqueeze(2))).squeeze(-1)
         # 2. Multiply by the squared directional Jacobian
         if self.mode == "closed_form":

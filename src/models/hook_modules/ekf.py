@@ -143,7 +143,6 @@ class ModelEKFInjectModule(LightningModule):
         if self.current_epoch == self.hparams.epoch_phase:
             print("Switching on EKFNet Gradient Propagation")
             self.ekf_net.train()
-            self.ekf_net.requires_grad_(True)
         elif self.current_epoch > self.hparams.epoch_phase:
             print("EKFNet is training")
         return super().on_train_epoch_start()
@@ -221,30 +220,27 @@ class ModelEKFInjectModule(LightningModule):
         [recon_scheduler, ekf_scheduler] = self.lr_schedulers()
 
         # ==== Reconstruction optimize ==== Phase 1
-        if self.current_epoch < self.hparams.epoch_phase:
-            self.toggle_optimizer(recon_opt)
-            recon_opt.zero_grad()
-            recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
-            self.manual_backward(recon_loss, retain_graph=True)
-            if batch_idx == 0:
-                print("Checking reconstructor gradient")
-                for item in self.controller.breakpoints:
-                        pos, bp = item['position'], item["breakpoint"]
-                        print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
-                        check_gradient(bp.callback)
-            recon_opt.step()
-            self.untoggle_optimizer(recon_opt)
-            # Only step the LR Scheduler when its missing a modality 
-            if signal[0] + signal[1] < 2:
-                recon_scheduler.step(recon_loss)
-        else:
-            recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
+        
+        self.toggle_optimizer(recon_opt)
+        recon_opt.zero_grad()
+        recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
+        self.manual_backward(recon_loss, retain_graph=True)
+        if batch_idx == 0:
+            print("Checking reconstructor gradient")
+            for item in self.controller.breakpoints:
+                    pos, bp = item['position'], item["breakpoint"]
+                    print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
+                    check_gradient(bp.callback)
+        recon_opt.step()
+        self.untoggle_optimizer(recon_opt)
+        # Only step the LR Scheduler when its missing a modality 
+        if signal[0] + signal[1] < 2:
+            recon_scheduler.step(recon_loss)
         # ==== Uncertainty Optimization ==== Phase 2
         if self.current_epoch >= self.hparams.epoch_phase:
             self.toggle_optimizer(ekf_opt)
             ekf_opt.zero_grad()
             unc_loss = unc["loss"].mean()
-            print(unc_loss.grad)
             self.manual_backward(unc_loss)
             if batch_idx == 0:
                 print("Checking Uncertainty Head Gradient")
