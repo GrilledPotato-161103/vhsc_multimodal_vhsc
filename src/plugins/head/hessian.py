@@ -7,16 +7,18 @@ beta (shape) is a single learnable scalar parameter.
 """
 from __future__ import annotations
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from contextlib import contextmanager
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.func import functional_call, vmap, jacrev, hessian
+from torch.func import functional_call, vmap, jacrev, hessian, jacfwd
 import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 from src.models.components.toy import MLP, Residual, get_normalization
 from src.plugins.var import BreakpointContext, BreakpointOutput
 from src.plugins.ekf_propagation import * 
+
 
 class HessianBiModalInferer(nn.Module):
     def __init__(self,
@@ -47,6 +49,7 @@ class HessianBiModalInferer(nn.Module):
             hidden_dims = [hidden_dims]
         self.reconstructor = reconstructor
         self.predictor = predictor
+
         latent_size = latent_dim * n_modals
         self.per_dim_uncertainty = per_dim_uncertainty
         self.output_dim = output_dim if per_dim_uncertainty else 1
@@ -55,7 +58,6 @@ class HessianBiModalInferer(nn.Module):
             raise ValueError(f"mode must be 'learned' or 'closed_form', got {mode!r}")
         self.mode = mode
         bottleneck_dim = bottleneck_dim or hidden_dims[-1]
-
         if activation == "relu":
             act = nn.ReLU
         elif activation == "silu":
@@ -96,7 +98,7 @@ class HessianBiModalInferer(nn.Module):
 
         # Alpha head
         inv_alpha_stem = nn.Sequential( 
-                                    nn.Linear(latent_size + hidden_dim, stem_dim, bias=False),
+                                    nn.Linear(hidden_dim + 1, stem_dim, bias=False),
                                     act(),
                                 )
         inv_alpha_blocks = MLP(in_dim=stem_dim,
@@ -136,20 +138,36 @@ class HessianBiModalInferer(nn.Module):
                                 )
         self.beta_net = nn.Sequential(beta_stem, beta_blocks, beta_head)
 
+    @contextmanager
+    def inference_mode(self):
+        # 1. Record the initial state (True if training, False if eval)
+        originally_training = self.training
+        try:
+            # 2. Switch to eval mode for inference
+            self.eval()
+            yield
+        finally:
+            # 3. This block ALWAYS runs, even if errors occur during 'yield'
+            if originally_training:
+                self.train()
+            else:
+                self.eval()
+
     # Export 
     def get_recon_fn(self, signal: tuple = (1, 1)):
         def infer(z):
             return self.reconstructor.forward_raw(z, signal=signal)
         return infer
     
-    def get_jacobian_hessian_fn(self, recon_fn):
-        recon_params = dict(self.reconstructor.named_parameters())
-        recon_buffers = dict(self.reconstructor.named_buffers())
-        pred_params = dict(self.predictor.named_parameters())
-        pred_buffers = dict(self.predictor.named_buffers()) 
+    def get_predictor_fn(self):
+        def infer(z):
+            return self.predictor(z)
+        return infer
+    
+    def get_jacobian_hessian_fn(self, recon_fn, pred_fn):
         def single_pred(z_single):
-            recon = functional_call(recon_fn, (recon_params, recon_buffers), z_single)
-            pred = functional_call(self.predictor.forward, (pred_params, pred_buffers), recon)
+            z_recon = recon_fn(z_single.unsqueeze(0))
+            pred = pred_fn(z_recon)
             return pred.squeeze()
         batched_grad_fn = vmap(jacrev(single_pred), randomness='same')
         batched_hessian_fn = vmap(hessian(single_pred), randomness='same')
@@ -163,20 +181,22 @@ class HessianBiModalInferer(nn.Module):
             signal:  (p1, p2) modality-presence tuple
         """
         assert self.predictor is not None, "Prediction head is None"
-        recon_fn = self.get_recon_fn(signal=signal)
-        jac_fn, hess_fn = self.get_jacobian_hessian_fn(recon_fn)
-        J = jac_fn(z)
-        H = hess_fn(z)
-        # Compute sigma_pred_sq from e2e for alpha prediction
-        sigma_pred_sq = (J ** 2 * torch.clamp_min(sigma_z, 1e-4)).sum(dim=-1)
+        # Hessian forbids randomness induction inside procedure
+        with self.inference_mode():
+            recon_fn, pred_fn = self.get_recon_fn(signal=signal), self.get_predictor_fn()
+            jac_fn, hess_fn = self.get_jacobian_hessian_fn(recon_fn, pred_fn)
+            J = jac_fn(z)
+            H = hess_fn(z)
+            # Compute sigma_pred_sq from e2e for alpha prediction
+            sigma_pred_sq = torch.einsum("bi,bij,bj->b", J, sigma_z, J).unsqueeze(-1)
 
-        if len(sigma_pred_sq.shape) < 2:
+        if self.mode == "closed_form":
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
             # Linear-Gaussian closed form (formalism/02 §3): beta=2, alpha=sqrt(2 sigma_pred_sq).
             # No learnable parameters in the heads — pure EKF-driven uncertainty.
             inv_alpha = 1.0 / torch.sqrt(2.0 * sigma_pred_sq + self.eps)
             beta = torch.full_like(sigma_pred_sq, 2.0)
-            return inv_alpha, beta, sigma_pred_sq
+            return pred, inv_alpha, beta, sigma_pred_sq
         
         w_H = torch.bmm(H, sigma_z)
         numerator = torch.linalg.vector_norm(w_H.flatten(start_dim=1), ord=2, dim=1)
@@ -187,6 +207,8 @@ class HessianBiModalInferer(nn.Module):
         kappa = kappa.unsqueeze_(-1)
         # mode == "learned" — bounded heads (see __init__ notes).
         output_latent = self.output_enc(pred)
+        # print(J.shape, sigma_z.shape, sigma_pred_sq.shape, output_latent.shape)
+
         beta_raw = self.beta_net(torch.cat([output_latent, kappa], dim=-1))
         # Normalization
         beta = self.beta_min + (self.beta_max - self.beta_min) * torch.sigmoid(beta_raw)
@@ -228,7 +250,6 @@ class DiscreteHessianBiModalInferer(nn.Module):
             hidden_dims = [hidden_dims]
         self.reconstructor = reconstructor
         self.predictor = predictor
-        latent_size = latent_dim * n_modals
         self.per_dim_uncertainty = per_dim_uncertainty
         self.output_dim = output_dim if per_dim_uncertainty else 1
         self.eps = eps
@@ -261,7 +282,7 @@ class DiscreteHessianBiModalInferer(nn.Module):
         )
         if len(hidden_dims) > 0: 
             output_enc_blocks = MLP(in_dim=stem_dim,
-                                hidden_dims=hidden_dims[1:-1],
+                                hidden_dims=hidden_dims,
                                 out_dim=hidden_dim,
                                 activation=activation,
                                 norm = norm,
@@ -277,7 +298,7 @@ class DiscreteHessianBiModalInferer(nn.Module):
 
         # Alpha head
         inv_alpha_stem = nn.Sequential( 
-                                    nn.Linear(latent_size + hidden_dim, stem_dim, bias=False),
+                                    nn.Linear(hidden_dim + 1, stem_dim, bias=False),
                                     act(),
                                 )
         inv_alpha_blocks = MLP(in_dim=stem_dim,
@@ -345,15 +366,16 @@ class DiscreteHessianBiModalInferer(nn.Module):
         # v_principal shape: (B, hidden_dim)
         # Var_dir = v^T * Sigma_z * v
         J_global = (pred_plus - pred_minus) / (2 * self.eps) * v_principal
-        sigma_pred_sq = torch.bmm(J_global.unsqueeze(1), torch.bmm(sigma_z, J_global.unsqueeze(2))).squeeze()
+        sigma_pred_sq = torch.einsum("bi,bij,bj->b", J_global, sigma_z, J_global)
+        # sigma_pred_sq = torch.bmm(J_global.unsqueeze(1), torch.bmm(sigma_z, J_global.unsqueeze(2))).squeeze(-1)
         # 2. Multiply by the squared directional Jacobian
-        if len(sigma_pred_sq.shape) < 2:
+        if self.mode == "closed_form":
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
             # Linear-Gaussian closed form (formalism/02 §3): beta=2, alpha=sqrt(2 sigma_pred_sq).
             # No learnable parameters in the heads — pure EKF-driven uncertainty.
             inv_alpha = 1.0 / torch.sqrt(2.0 * sigma_pred_sq + self.eps)
             beta = torch.full_like(sigma_pred_sq, 2.0)
-            return inv_alpha, beta, sigma_pred_sq
+            return pred, inv_alpha, beta, sigma_pred_sq
         
         output_latent = self.output_enc(pred)
         beta_raw = self.beta_net(torch.cat([output_latent, kappa], dim=-1))

@@ -3,7 +3,7 @@ _partial_: True
 
 defaults:
   - _self_
-  - ekf_net: default
+  - ekf_net: hessian
 
 expression: ${expression}
 

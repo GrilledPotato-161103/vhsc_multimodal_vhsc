@@ -205,7 +205,7 @@ class ModelEKFInjectModule(LightningModule):
         # EKF Propagation. sigma_z is per-sample full covariance from the
         # SD-setting provider (Mahalanobis-scaled source covariance).
         z = torch.cat(srcs, dim=-1).detach()
-        print(z.shape)
+        # print(z.shape)
         sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
         mu, inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=mu, inv_alpha=inv_alpha, beta=beta)
@@ -303,7 +303,6 @@ class ModelEKFInjectModule(LightningModule):
                     on_step=True,
                     on_epoch=True,
                     prog_bar=True)
-
             # EKF diagnostics: mean = magnitude, std = per-sample spread.
             # std ~ 0 means the chain collapses sigma_pred to a constant.
             sps = unc["sigma_pred_sq"].detach().flatten()
