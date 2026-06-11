@@ -23,4 +23,4 @@ scheduler:
   patience: 10
   min_lr: 1e-6
 
-cache_name: checkpoint_v1
+cache_name: checkpoint_toy_model_v1

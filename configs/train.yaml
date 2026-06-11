@@ -4,8 +4,8 @@ expression: "((x1**2 - x2**2) / (torch.abs(x1) + torch.abs(x2) + 0.1)) * torch.a
 # order of defaults determines the order in which configs override each other
 defaults:
   - _self_
-  - data: manifold
-  - model: manifold
+  - data: toy
+  - model: toy
   - callbacks: default
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: default
@@ -32,7 +32,7 @@ defaults:
 logger:
   wandb:
     project: "VISHC_Uncertainty"
-    name: toy_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    name: manifold_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
 task_name: "train"
 
 callbacks:

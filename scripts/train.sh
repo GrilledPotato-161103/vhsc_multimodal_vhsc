@@ -1,0 +1,1 @@
+python src/train.py logger.wandb.name=toy_model_pretraining
