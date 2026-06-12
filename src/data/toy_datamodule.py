@@ -6,6 +6,7 @@ import math
 
 import torch
 from torch.utils.data import Dataset, DataLoader, random_split
+from src.data.components.sampler import SortedBatchSampler
 import numpy as np
 
 try:
@@ -143,8 +144,9 @@ class ToyBiModalDataModule(L.LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             self.train_dataset,
-            batch_size=self.hparams.batch_size,
-            shuffle=True,
+            batch_sampler=SortedBatchSampler(self.train_dataset.x1, 
+                                             batch_size=self.hparams.batch_size,
+                                             shuffle=True),
             num_workers=self.hparams.num_workers,
             pin_memory=True,
         )

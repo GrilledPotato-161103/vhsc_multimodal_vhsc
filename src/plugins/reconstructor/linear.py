@@ -6,6 +6,7 @@ import torch.nn as nn
 from torch.nn import functional as F, init
 
 from src.models.components.ffn import FeedForward
+from src.models.components.toy import MLP
 from src.plugins.var import BreakpointContext, BreakpointOutput
 
 class HuberLoss(nn.Module):
@@ -23,7 +24,7 @@ class HuberLoss(nn.Module):
 class BilinearReconstructor(nn.Module): 
     def __init__(self,  d_1: int,
                         d_2: int,
-                        hidden_dim: int = 32,
+                        hidden_dims: int | list = 32,
                         concat: bool = False,
                         activation: str = "relu",
                         norm: str = "none",
@@ -34,10 +35,54 @@ class BilinearReconstructor(nn.Module):
         self.concat = concat
         self.d_1 = d_1
         self.d_2 = d_2
-        self.ln12 = FeedForward(in_dim=d_1, hidden_dim=hidden_dim, out_dim=d_2, activation=activation, norm=norm, dropout=dropout, adn_order=order)
-        self.ln21 = FeedForward(in_dim=d_2, hidden_dim=hidden_dim, out_dim=d_1, activation=activation, norm=norm, dropout=dropout, adn_order=order)
-        self.dev1 = nn.Sequential(FeedForward(in_dim=d_1 + d_2, hidden_dim=hidden_dim * 2, out_dim=d_1, activation=activation, norm=norm, dropout=dropout, adn_order=order), nn.ReLU())
-        self.dev2 = nn.Sequential(FeedForward(in_dim=d_1 + d_2, hidden_dim=hidden_dim * 2, out_dim=d_2, activation=activation, norm=norm, dropout=dropout, adn_order=order), nn.ReLU())        
+        if not isinstance(hidden_dims, list):
+            hidden_dims = list(hidden_dims)
+        hidden_dim = hidden_dims[-1]
+        hidden_dims = hidden_dims[:-1]
+        # self.ln12 = FeedForward(in_dim=d_1, hidden_dim=hidden_dim, out_dim=d_2, activation=activation, norm=norm, dropout=dropout, adn_order=order)
+        # self.ln21 = FeedForward(in_dim=d_2, hidden_dim=hidden_dim, out_dim=d_1, activation=activation, norm=norm, dropout=dropout, adn_order=order)
+        self.ln12 = nn.Sequential(
+                        MLP(in_dim=d_1,
+                        hidden_dims=hidden_dims,
+                        out_dim=hidden_dim,
+                        activation=activation,
+                        norm=norm,
+                        dropout=dropout,
+                        residual=True
+                        ),
+                        nn.Linear(hidden_dim, d_2)
+                    )
+        
+        self.ln21 = nn.Sequential(
+                        MLP(in_dim=d_2,
+                        hidden_dims=hidden_dims,
+                        out_dim=hidden_dim,
+                        activation=activation,
+                        norm=norm,
+                        dropout=dropout,
+                        residual=True
+                        ),
+                        nn.Linear(hidden_dim, d_1)
+                    )
+        
+        self.dev1 = nn.Sequential(
+                            FeedForward(in_dim=d_1 + d_2, 
+                                        hidden_dim=d_1 * 2, 
+                                        out_dim=d_1, 
+                                        activation=activation, 
+                                        norm=norm, 
+                                        dropout=dropout, 
+                                        adn_order=order)
+                            )
+        self.dev2 = nn.Sequential(
+                            FeedForward(in_dim=d_1 + d_2, 
+                                        hidden_dim=d_2 * 2, 
+                                        out_dim=d_2, 
+                                        activation=activation, 
+                                        norm=norm, 
+                                        dropout=dropout, 
+                                        adn_order=order)
+                            )        
         # To help on learning distance
         self.dist = dist
     

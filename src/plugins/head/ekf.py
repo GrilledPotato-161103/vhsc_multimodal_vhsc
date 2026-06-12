@@ -86,12 +86,13 @@ class EKFBiModalInferer(nn.Module):
         else:
             output_enc_blocks = nn.Identity()
         self.output_enc = nn.Sequential(output_enc_stem, output_enc_blocks)
-        # Mu head
+        # Mu headw
         self.mu_head = nn.Linear(hidden_dim, self.pred_dim)
 
+        # Alpha blocks
         self.inv_alpha_stem = nn.Sequential( 
                                     nn.Linear(latent_size + output_dim, stem_dim, bias=True),
-                                    act(),
+                                    nn.Softplus(),
                                 )
         inv_alpha_blocks = MLP(in_dim=stem_dim + hidden_dim,
                                 hidden_dims=hidden_dims,
@@ -109,6 +110,7 @@ class EKFBiModalInferer(nn.Module):
                                 )
         self.inv_alpha_net = nn.Sequential(inv_alpha_blocks, inv_alpha_head)
 
+        # Beta blocks
         self.beta_stem = nn.Sequential(
                                     nn.Linear(latent_size, stem_dim, bias=True),
                                     act(),
@@ -130,6 +132,15 @@ class EKFBiModalInferer(nn.Module):
 
         self.beta_net = nn.Sequential(beta_blocks, beta_head)
 
+    def get_parameters(self):
+        params = []
+        params.extend(list(self.output_enc.parameters()))
+        params.extend(list(self.mu_head.parameters()))
+        params.extend(list(self.inv_alpha_stem.parameters()))
+        params.extend(list(self.inv_alpha_net.parameters()))
+        params.extend(list(self.beta_stem.parameters()))
+        params.extend(list(self.beta_net.parameters()))
+        return params
     # Export 
     def get_recon_fn(self, signal: tuple = (1, 1)):
         def infer(z):
@@ -169,7 +180,7 @@ class EKFBiModalInferer(nn.Module):
         # Feed the EKF variance in log-space so the head sees a well-scaled signal
         # regardless of whether sigma_pred_sq is 1e-4 or 1e4.
         ekf_feat = torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1)
-        inv_alpha_stem = torch.log(torch.concatenate([self.inv_alpha_stem(ekf_feat), torch.abs(output_latent)], dim=-1).clamp_min(self.eps))
+        inv_alpha_stem = torch.concatenate([torch.log(self.inv_alpha_stem(ekf_feat)).clamp_min(self.eps), output_latent], dim=-1)
         inv_alpha = F.softplus(self.inv_alpha_net(inv_alpha_stem)) + self.eps
         mu = self.mu_head(output_latent)
         return mu, inv_alpha, beta, sigma_pred_sq

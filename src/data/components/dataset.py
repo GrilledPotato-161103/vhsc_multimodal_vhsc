@@ -44,7 +44,6 @@ class ToyDataset(Dataset):
         self.noise_ratio = noise_ratio
         self.noise_std = noise_std
         self.dtype = dtype
-
         g = torch.Generator().manual_seed(seed) if not generator else generator
         # Sử dụng Normal distribution để thể hiện rõ hơn về mean và variance thực tế
         l1, r1 = x1_range
@@ -55,7 +54,7 @@ class ToyDataset(Dataset):
         else:
             self.x1 = torch.empty((n_samples,)).uniform_(l1, r1, generator=g)
             self.x2 = torch.empty((n_samples,)).uniform_(l2, r2, generator=g)
-
+            
         indexes = torch.bernoulli(torch.full((n_samples,), noise_ratio)).int()
 
         # Uniform để tối đa hóa entropy

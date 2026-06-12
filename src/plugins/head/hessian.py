@@ -78,7 +78,7 @@ class HessianBiModalInferer(nn.Module):
         # Output encoders to sync mu head
         output_enc_stem = nn.Sequential(
             nn.Linear(self.pred_dim, stem_dim),
-            act(),
+            act(inplace=False),
         )
         if len(hidden_dims) > 0: 
             output_enc_blocks = MLP(in_dim=stem_dim,
@@ -99,7 +99,7 @@ class HessianBiModalInferer(nn.Module):
         # Alpha head
         inv_alpha_stem = nn.Sequential( 
                                     nn.Linear(hidden_dim + 1, stem_dim, bias=False),
-                                    act(),
+                                    act(inplace=False),
                                 )
         inv_alpha_blocks = MLP(in_dim=stem_dim,
                                 hidden_dims=hidden_dims,
@@ -120,7 +120,7 @@ class HessianBiModalInferer(nn.Module):
 
         beta_stem = nn.Sequential(
                                     nn.Linear(hidden_dim + 1, stem_dim, bias=False),
-                                    act(),
+                                    act(inplace=False),
                                     nn.LayerNorm(stem_dim)
                                 )
         beta_blocks = MLP(in_dim=stem_dim,
@@ -153,6 +153,14 @@ class HessianBiModalInferer(nn.Module):
             else:
                 self.eval()
 
+    def get_parameters(self):
+        params = []
+        params.extend(list(self.output_enc.parameters()))
+        params.extend(list(self.mu_head.parameters()))
+        params.extend(list(self.inv_alpha_net.parameters()))
+        params.extend(list(self.beta_net.parameters()))
+        return params
+    
     # Export 
     def get_recon_fn(self, signal: tuple = (1, 1)):
         def infer(z):
@@ -338,6 +346,14 @@ class DiscreteHessianBiModalInferer(nn.Module):
                                 )
         self.beta_net = nn.Sequential(beta_stem, beta_blocks, beta_head)
 
+    def get_parameters(self):
+        params = []
+        params.extend(list(self.output_enc.parameters()))
+        params.extend(list(self.mu_head.parameters()))
+        params.extend(list(self.inv_alpha_net.parameters()))
+        params.extend(list(self.beta_net.parameters()))
+        return params
+    
     # Export 
     def get_recon_fn(self, signal: tuple = (1, 1)):
         def infer(z):

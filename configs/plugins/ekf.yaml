@@ -10,7 +10,7 @@ breakpoints:
         _target_: src.plugins.reconstructor.linear.BilinearReconstructor
         d_1: 16
         d_2: 16
-        hidden_dim: 16
+        hidden_dims: [32, 16, 16, 16]
         activation: silu
         norm: group
         dropout: 0.3

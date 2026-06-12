@@ -32,7 +32,7 @@ recon_criterion:
 unc_criterion:
   _target_: src.plugins.head.bayescap.BayesCap1DLoss
   reduction: none
-  lambda_identity: 0.5
+  lambda_identity: 0.1
   lambda_nll: 1.0
   identity_mode: l2
   nll_mode: paper

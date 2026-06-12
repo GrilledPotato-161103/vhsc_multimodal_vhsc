@@ -177,8 +177,8 @@ class ModelEKFInjectModule(LightningModule):
         else:
             bp_signal = [1, 1]
             mask_index = np.random.choice(3, 1, p= (1 - self.hparams.mask_rate, 
-                                                self.hparams.mask_rate / 2,
-                                                self.hparams.mask_rate / 2))[0]
+                                                0,
+                                                self.hparams.mask_rate))[0]
             if mask_index > 0: 
                 bp_signal[mask_index - 1] = 0
                 xs[mask_index - 1] *= 0
@@ -219,29 +219,14 @@ class ModelEKFInjectModule(LightningModule):
         [recon_opt, ekf_opt] = self.optimizers()
         [recon_scheduler, ekf_scheduler] = self.lr_schedulers()
 
-        # ==== Reconstruction optimize ==== Phase 1
-        
-        self.toggle_optimizer(recon_opt)
-        recon_opt.zero_grad()
-        recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
-        self.manual_backward(recon_loss, retain_graph=True)
-        if batch_idx == 0:
-            print("Checking reconstructor gradient")
-            for item in self.controller.breakpoints:
-                    pos, bp = item['position'], item["breakpoint"]
-                    print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
-                    check_gradient(bp.callback)
-        recon_opt.step()
-        self.untoggle_optimizer(recon_opt)
-        # Only step the LR Scheduler when its missing a modality 
-        if signal[0] + signal[1] < 2:
-            recon_scheduler.step(recon_loss)
+
         # ==== Uncertainty Optimization ==== Phase 2
         if self.current_epoch >= self.hparams.epoch_phase:
             self.toggle_optimizer(ekf_opt)
             ekf_opt.zero_grad()
             unc_loss = unc["loss"].mean()
-            self.manual_backward(unc_loss)
+            with torch.autograd.set_detect_anomaly(True, check_nan=False):
+                self.manual_backward(unc_loss, retain_graph=True)
             if batch_idx == 0:
                 print("Checking Uncertainty Head Gradient")
                 print(f"Checking gradient for Loss's Calibrator  {self.unc_criterion.__class__.__qualname__}")
@@ -253,6 +238,25 @@ class ModelEKFInjectModule(LightningModule):
             self.untoggle_optimizer(ekf_opt)
         else:
             unc_loss = unc["loss"].mean()
+
+        # ==== Reconstruction optimize ==== Phase 1
+        
+        self.toggle_optimizer(recon_opt)
+        recon_opt.zero_grad()
+        recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
+        self.manual_backward(recon_loss)
+        if batch_idx == 0:
+            print("Checking reconstructor gradient")
+            for item in self.controller.breakpoints:
+                    pos, bp = item['position'], item["breakpoint"]
+                    print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
+                    check_gradient(bp.callback)
+        recon_opt.step()
+        if signal[0] + signal[1] < 2:
+            recon_scheduler.step(recon_loss)
+        self.untoggle_optimizer(recon_opt)
+        # Only step the LR Scheduler when its missing a modality 
+        
         return recon_loss, unc_loss
         
     def training_step(
@@ -485,12 +489,7 @@ class ModelEKFInjectModule(LightningModule):
             bp_parameters = bp_parameters + list(bp.callback.parameters())
         bp_optimizer = self.hparams.optimizer(params=bp_parameters)
         # Loss also has learnable calibration params
-        ekf_parameters = []
-        ekf_parameters += list(self.unc_criterion.parameters())
-        ekf_parameters += list(self.ekf_net.output_enc.parameters())
-        ekf_parameters += list(self.ekf_net.mu_head.parameters())
-        ekf_parameters += list(self.ekf_net.inv_alpha_net.parameters())
-        ekf_parameters += list(self.ekf_net.beta_net.parameters())
+        ekf_parameters = self.ekf_net.get_parameters()
         ekf_optimizer = self.hparams.optimizer(params=ekf_parameters)
         if self.hparams.scheduler is not None:
             bp_scheduler = self.hparams.scheduler(optimizer=bp_optimizer)
