@@ -40,7 +40,7 @@ logger:
   wandb:
     project: "VISHC_Uncertainty"
     name: hook_ekf_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
-    offline: false
+    offline: true
 task_name: "train"
 
 callbacks:

@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 import os
+import argparse
 import functools
 import hydra
 import lightning as L
@@ -7,7 +8,7 @@ import rootutils
 import torch
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 torch.serialization.add_safe_globals([functools.partial])
 
@@ -62,12 +63,13 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
     datamodule.setup()
     log.info(f"Instantiating model <{cfg.model._target_}>")
-    net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).cuda()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = torch.load(cfg.plugins.model_checkpoint, weights_only=False).to(device)
     net.eval()
     net.requires_grad_(True)
     controller = BreakpointController.__init_dict__(net, cfg.plugins)
-    controller.cuda()
-    print(list(Breakpoint.list_of_breakpoints.keys()))
+    controller.to(device)
+    log.info("Breakpoints registered: %s", list(Breakpoint.list_of_breakpoints.keys()))
     model: LightningModule = hydra.utils.instantiate(cfg.model)
     model = model(net = net, controller = controller, src_dataset=datamodule.src_dataset)
 

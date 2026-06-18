@@ -10,16 +10,17 @@ from src.models.components.toy import MLP
 from src.plugins.var import BreakpointContext, BreakpointOutput
 
 class HuberLoss(nn.Module):
-    def __init__(self, threshold=0.5):
+    """Huber loss with configurable threshold (vectorized for batched input)."""
+
+    def __init__(self, threshold: float = 0.5):
         super().__init__()
         self.threshold = threshold
-    
-    def forward(self, pred, target):
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         l1_norm = torch.abs(target - pred)
-        if l1_norm < self.threshold:
-            return 0.5 * (l1_norm ** 2).mean()
-        else:
-            return (self.threshold * (l1_norm - self.threshold)).mean()
+        quadratic = 0.5 * (l1_norm ** 2)
+        linear = self.threshold * (l1_norm - 0.5 * self.threshold)
+        return torch.where(l1_norm < self.threshold, quadratic, linear).mean()
 
 class BilinearReconstructor(nn.Module): 
     def __init__(self,  d_1: int,
@@ -161,19 +162,23 @@ class LinearReconstructor(nn.Module):
 
     def forward(self, id, input=None):
         # Semaphore to interrupt model inference.
-        self.collect(self, id, input)
-        while not self.is_ready():
-            pass
+        self.collect(id, input)
+        if not self.is_ready():
+            # Not all modalities have been collected yet — return None
+            # as a signal that reconstruction cannot proceed.
+            # The caller should handle this gracefully.
+            return None
+
         def inv(x: torch.Tensor, layer: nn.Linear) -> torch.Tensor:
             bias = layer.bias if layer.bias is not None else 0
             return torch.linalg.solve(layer.weight, x - bias)
-        
-        self.proj_loss.zero_grad()
+
+        rec_list: list[torch.Tensor] = []
         # Reconstruct missing modality by inverse transform
         for rec_id in self.data.keys():
             if self.data[rec_id] is not None:
-                rec_tensor.append(inv(self.data[rec_id], self.proj[id]))
-        rec_tensor = torch.stack(rec_tensor, dim=1)
+                rec_list.append(inv(self.data[rec_id], self.proj[id]))
+        rec_tensor = torch.stack(rec_list, dim=1)
         # Penalty on projection variance
         self.proj_var += torch.var(rec_tensor, dim=1).mean()
         # Reconstruct by mean of projections

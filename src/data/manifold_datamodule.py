@@ -101,7 +101,7 @@ class ManifoldDataModule(L.LightningDataModule):
                                                     sampling="uniform"
                                                     )
         self.val_dataset = ManifoldToyDataset(
-                                                n_samples=n_train,
+                                                n_samples=n_val,
                                                 x_expressions=self.hparams.x_expressions,
                                                 y_expression=self.hparams.y_expression,
                                                 z_range=self.hparams.z_range,
@@ -114,7 +114,7 @@ class ManifoldDataModule(L.LightningDataModule):
                                                 )
 
         self.test_dataset = ManifoldToyDataset(
-                                                    n_samples=n_train,
+                                                    n_samples=n_test,
                                                     x_expressions=self.hparams.x_expressions,
                                                     y_expression=self.hparams.y_expression,
                                                     z_range=self.hparams.z_range,

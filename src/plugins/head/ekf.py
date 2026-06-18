@@ -70,31 +70,31 @@ class EKFBiModalInferer(nn.Module):
         hidden_dim = hidden_dims[-1]
         hidden_dims = hidden_dims[1:-1]
         # Output encoders to sync mu head
-        output_enc_stem = nn.Sequential(
-            nn.Linear(self.pred_dim, stem_dim),
-            act(),
-        )
-        if len(hidden_dims) > 0: 
-            output_enc_blocks = MLP(in_dim=stem_dim,
-                                hidden_dims=hidden_dims,
-                                out_dim=hidden_dim,
-                                activation=activation,
-                                norm = norm,
-                                residual= True,
-                                dropout=dropout
-                                )
-        else:
-            output_enc_blocks = nn.Identity()
-        self.output_enc = nn.Sequential(output_enc_stem, output_enc_blocks)
-        # Mu headw
-        self.mu_head = nn.Linear(hidden_dim, self.pred_dim)
+        # output_enc_stem = nn.Sequential(
+        #     nn.Linear(self.pred_dim, stem_dim),
+        #     act(),
+        # )
+        # if len(hidden_dims) > 0: 
+        #     output_enc_blocks = MLP(in_dim=stem_dim,
+        #                         hidden_dims=hidden_dims,
+        #                         out_dim=hidden_dim,
+        #                         activation=activation,
+        #                         norm = norm,
+        #                         residual= True,
+        #                         dropout=dropout
+        #                         )
+        # else:
+        #     output_enc_blocks = nn.Identity()
+        # self.output_enc = nn.Sequential(output_enc_stem, output_enc_blocks)
+        # # Mu headw
+        # self.mu_head = nn.Linear(hidden_dim, self.pred_dim)
 
         # Alpha blocks
         self.inv_alpha_stem = nn.Sequential( 
-                                    nn.Linear(latent_size + output_dim, stem_dim, bias=True),
+                                    nn.Linear(latent_size + output_dim, stem_dim, bias=False),
                                     nn.Softplus(),
                                 )
-        inv_alpha_blocks = MLP(in_dim=stem_dim + hidden_dim,
+        inv_alpha_blocks = MLP(in_dim=stem_dim,
                                 hidden_dims=hidden_dims,
                                 out_dim=hidden_dim,
                                 activation=activation,
@@ -112,11 +112,11 @@ class EKFBiModalInferer(nn.Module):
 
         # Beta blocks
         self.beta_stem = nn.Sequential(
-                                    nn.Linear(latent_size, stem_dim, bias=True),
+                                    nn.Linear(latent_size, stem_dim, bias=False),
                                     act(),
                                     nn.LayerNorm(stem_dim)
                                 )
-        beta_blocks = MLP(in_dim=stem_dim + hidden_dim,
+        beta_blocks = MLP(in_dim=stem_dim,
                                 hidden_dims=hidden_dims,
                                 out_dim=hidden_dim,
                                 activation=activation,
@@ -134,8 +134,8 @@ class EKFBiModalInferer(nn.Module):
 
     def get_parameters(self):
         params = []
-        params.extend(list(self.output_enc.parameters()))
-        params.extend(list(self.mu_head.parameters()))
+        # params.extend(list(self.output_enc.parameters()))
+        # params.extend(list(self.mu_head.parameters()))
         params.extend(list(self.inv_alpha_stem.parameters()))
         params.extend(list(self.inv_alpha_net.parameters()))
         params.extend(list(self.beta_stem.parameters()))
@@ -173,15 +173,16 @@ class EKFBiModalInferer(nn.Module):
 
         # mode == "learned" — bounded heads (see __init__ notes).
         S_f = torch.linalg.svdvals(J_f.permute(0, 2, 1))
-        output_latent = self.output_enc(pred)
-        beta_stem = torch.concatenate([self.beta_stem(S_f / torch.amax(S_f, dim=-1, keepdim=True)), output_latent], dim=-1)
+        # output_latent = self.output_enc(pred)
+        # mu = self.mu_head(output_latent)
+        beta_stem = self.beta_stem(S_f / torch.amax(S_f, dim=-1, keepdim=True))
         beta_raw = self.beta_net(beta_stem)
         beta = self.beta_min + (self.beta_max - self.beta_min) * torch.sigmoid(beta_raw)
         # Feed the EKF variance in log-space so the head sees a well-scaled signal
         # regardless of whether sigma_pred_sq is 1e-4 or 1e4.
-        ekf_feat = torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1)
-        inv_alpha_stem = torch.concatenate([torch.log(self.inv_alpha_stem(ekf_feat)).clamp_min(self.eps), output_latent], dim=-1)
+        ekf_feat = torch.log(torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1)).clamp_min(self.eps)
+        # print(ekf_feat.shape)
+        inv_alpha_stem = self.inv_alpha_stem(ekf_feat)
         inv_alpha = F.softplus(self.inv_alpha_net(inv_alpha_stem)) + self.eps
-        mu = self.mu_head(output_latent)
-        return mu, inv_alpha, beta, sigma_pred_sq
+        return pred, inv_alpha, beta, sigma_pred_sq
         

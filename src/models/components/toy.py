@@ -5,52 +5,7 @@ from typing import Literal, Optional
 import torch
 from torch import nn
 
-
-def get_activation(name: Literal["relu", "gelu", "silu"]) -> nn.Module:
-    if name == "relu":
-        return nn.ReLU()
-    if name == "gelu":
-        return nn.GELU()
-    if name == "silu":
-        return nn.SiLU()
-    raise ValueError(f"Unsupported activation: {name}")
-
-def get_normalization(
-    name: Optional[Literal["batch", "layer", "group"]], 
-    num_features: int,
-    dimension: Literal[1, 2, 3] = 1,
-    num_groups: int = 3
-) -> nn.Module:
-    """
-    Returns a PyTorch normalization module explicitly using a dimension argument.
-    
-    Args:
-        name: The name of the normalization layer. If None, returns nn.Identity().
-        num_features: The number of features/channels to normalize.
-        dimension: The spatial dimension of the input (1, 2, or 3). Primarily used for BatchNorm.
-        **kwargs: Extra arguments (like num_groups for GroupNorm).
-    """
-    if name is None:
-        return nn.Identity()
-        
-    if name == "batch":
-        if dimension == 1:
-            return nn.BatchNorm1d(num_features=num_features)
-        elif dimension == 2:
-            return nn.BatchNorm2d(num_features=num_features)
-        elif dimension == 3:
-            return nn.BatchNorm3d(num_features=num_features)
-        else:
-            raise ValueError(f"I'm completely unsure how to create a BatchNorm for dimension {dimension}.")
-            
-    if name == "layer":
-        # LayerNorm takes normalized_shape, which is usually just the feature dimension
-        return nn.LayerNorm(normalized_shape=num_features)
-        
-    if name == "group":
-        return nn.GroupNorm(num_groups=num_groups, num_channels=num_features)
-    
-    return nn.Identity()
+from src.models.components.common import get_activation, get_normalization
 
 class Residual(nn.Module):
     def __init__(self, blocks: nn.Module):

@@ -47,7 +47,7 @@ class NCELoss(torch.nn.Module):
         # loss = log_softmax
 
         if torch.isnan(log_softmax).any():
-            import IPython; IPython.embed(); exit(1)
+            raise ValueError("NaN detected in NCE log_softmax — check inputs and temperature.")
 
         return log_softmax
 
@@ -81,7 +81,7 @@ class GaussianAlignLoss(torch.nn.Module):
         corr_loss = (1 - pearson_corr).abs().mean()
 
         if torch.isnan(loss).any():
-            import IPython; IPython.embed(); exit(0)
+            raise ValueError("NaN detected in loss computation — check inputs.")
             
         return beta * torch.mean(loss) + self.gamma * corr_loss
         # return self.gamma * corr_loss + resi.mean()
@@ -106,7 +106,7 @@ class GaussianAlignLoss(torch.nn.Module):
         # print('corr loss: ', corr_loss.mean().item(), 'resi loss: ', resi.norm(p=2, dim=-1).mean().item(), 'beta: ', beta, 'gamma: ', self.gamma)
         
         if torch.isnan(corr_loss).any():
-            import IPython; IPython.embed(); exit(0)
+            raise ValueError("NaN detected in loss computation — check inputs.")
             
         return beta * resi.mean() + self.gamma * corr_loss.mean()
 
@@ -133,7 +133,7 @@ class WeightedCrossEntropyLoss(torch.nn.Module):
         # weighted cross entropy loss, with weight for samples with incomplete labels
         loss = F.cross_entropy(pred, gtruth, reduction='none')
         if torch.isnan(loss).any():
-            import IPython; IPython.embed(); exit(1)
+            raise ValueError("NaN detected in loss computation — check inputs.")
             
         loss = (loss * weight).mean()
         return loss
@@ -164,7 +164,7 @@ class WeightedL1Loss(torch.nn.Module):
         # loss = F.cross_entropy(pred, gtruth, reduction='none')
         loss = F.l1_loss(pred, gtruth, reduction='none')
         if torch.isnan(loss).any():
-            import IPython; IPython.embed(); exit(1)
+            raise ValueError("NaN detected in loss computation — check inputs.")
             
         loss = (loss * weight).mean()
         return loss
@@ -195,7 +195,7 @@ class OrderedEnforceLoss(torch.nn.Module):
         loss = positive_likelihood.sum(dim=0) / (positive_mask.sum(0) + EPSILON) - negative_likelihood.sum(dim=0) / (negative_mask.sum(0) + EPSILON)
         
         if torch.isnan(loss).any():
-            import IPython; IPython.embed(); exit(1)
+            raise ValueError("NaN detected in loss computation — check inputs.")
 
         return torch.mean(loss)
 

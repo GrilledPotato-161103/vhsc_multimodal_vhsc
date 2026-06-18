@@ -10,13 +10,6 @@ def default_pack_fn(inputs: Dict[str, Any]) -> Tuple[Tuple[Any, ...], Dict[str, 
     """
     return (), dict(inputs)
 
-class Node(nn.Module):
-    """
-    Node tính toán chung 1 computational graph, lấy ý tưởng tương tự GStreamer
-    Bao gồm: 
-    srcs: địa chỉ 
-    """
-    
 class Router(nn.Module):
     """
     Router gom inputs cho các endpoint.

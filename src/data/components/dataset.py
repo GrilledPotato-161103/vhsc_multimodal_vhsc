@@ -149,7 +149,6 @@ class ManifoldToyDataset(Dataset):
         augment = lambda x: torch.where(indexes > 0, x + noise_std * torch.empty_like(x).uniform_(-1, 1, generator=g), x)
         self.xs = [self._evaluate_expression(x_exp, self.z) for x_exp in self.x_expressions]
         self.y = self._evaluate_expression(self.y_expression, self.z)
-        print("Modality shapes:", [x.shape for x in self.xs])
         self.z = self.z.permute(1, 0)
         if noise_std > 0:
             # Augmenting y seems to break the cycle

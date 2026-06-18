@@ -1,8 +1,12 @@
+import logging
 from typing import List, Callable, Tuple, Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from lightning import LightningModule
+
+log = logging.getLogger(__name__)
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.classification.accuracy import Accuracy
 # from models.SURE.modules.mmbt import (
@@ -79,7 +83,7 @@ class MMBTLitModule(LightningModule):
                      beta,
                      use_fused_uncertainty=False):
         joint_mod_loss_sum = torch.tensor(0., device=pred.device)
-        target_mask - target_mask.squeeze()
+        target_mask = target_mask.squeeze()
         # Mask for what
         whole_mask = torch.logical_and(target_mask[:, 0], target_mask[:, 1])
         partial_mask = torch.logical_or(target_mask[:, 0], target_mask[:, 1])
@@ -110,8 +114,8 @@ class MMBTLitModule(LightningModule):
                 
                 # print('propagate_uncertainty: ', propagate_uncertainty.mean(), 'fused_uncertainty: ', fused_uncertainty.mean())
                 fused_uncertainty += propagate_uncertainty
-            except:
-                pass
+            except Exception as exc:
+                log.warning("Propagation uncertainty computation failed: %s", exc)
             joint_mod_loss_sum = self.output_criterion(target, 
                                                        pred, 
                                                        fused_uncertainty, 
@@ -124,11 +128,12 @@ class MMBTLitModule(LightningModule):
         # loss = torch.mean(joint_mod_loss_sum)
         # loss = torch.mean(supervised_loss)
 
+        tqdm_dict = {}
         if self.dataset == 'book':
             tqdm_dict = eval_book(pred, target, fused_uncertainty)
 
         tqdm_dict["loss"] = loss
-        
+
         return loss, tqdm_dict
     
     def model_step(

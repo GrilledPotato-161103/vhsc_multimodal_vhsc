@@ -2,62 +2,10 @@ import torch
 import torch.nn as nn
 from typing import Optional, Sequence, Literal
 
-def build_activation(name: Optional[str]) -> nn.Module:
-    if name is None or name.lower() in {"none", "identity"}:
-        return nn.Identity()
+from src.models.components.common import get_activation, get_normalization
 
-    name = name.lower()
-    if name == "relu":
-        return nn.ReLU(inplace=False)
-    if name == "gelu":
-        return nn.GELU(inplace=False)
-    if name in {"silu", "swish"}:
-        return nn.SiLU(inplace=False)
-    if name == "tanh":
-        return nn.Tanh(inplace=False)
-    if name == "leaky_relu":
-        return nn.LeakyReLU(inplace=False)
-    raise ValueError(f"Unsupported activation: {name}")
-
-
-def get_normalization(
-    name: Optional[Literal["batch", "layer", "group"]], 
-    num_features: int,
-    dimension: Literal[1, 2, 3] = 1,
-    **kwargs
-) -> nn.Module:
-    """
-    Returns a PyTorch normalization module explicitly using a dimension argument.
-    
-    Args:
-        name: The name of the normalization layer. If None, returns nn.Identity().
-        num_features: The number of features/channels to normalize.
-        dimension: The spatial dimension of the input (1, 2, or 3). Primarily used for BatchNorm.
-        **kwargs: Extra arguments (like num_groups for GroupNorm).
-    """
-    if name is None:
-        return nn.Identity()
-        
-    if name == "batch":
-        if dimension == 1:
-            return nn.BatchNorm1d(num_features=num_features, **kwargs)
-        elif dimension == 2:
-            return nn.BatchNorm2d(num_features=num_features, **kwargs)
-        elif dimension == 3:
-            return nn.BatchNorm3d(num_features=num_features, **kwargs)
-        else:
-            raise ValueError(f"I'm completely unsure how to create a BatchNorm for dimension {dimension}.")
-            
-    if name == "layer":
-        # LayerNorm takes normalized_shape, which is usually just the feature dimension
-        return nn.LayerNorm(normalized_shape=num_features, **kwargs)
-        
-    if name == "group":
-        # GroupNorm requires 'num_groups', defaulting to 32 if not provided in kwargs
-        num_groups = kwargs.pop("num_groups", 2)
-        return nn.GroupNorm(num_groups=num_groups, num_channels=num_features, **kwargs)
-    
-    return nn.Identity()
+# Backward-compatible alias
+build_activation = get_activation
 
 
 class FeedForward(nn.Module):
@@ -124,9 +72,8 @@ class FeedForward(nn.Module):
         dropout: float,
         adn_order: str,
     ) -> nn.Sequential:
-        print(dropout, activation, norm, out_dim)
         ops = {
-            "a": build_activation(activation),
+            "a": get_activation(activation),
             "d": nn.Dropout(dropout),
             "n": get_normalization(norm, num_features=out_dim, dimension=1),
         }

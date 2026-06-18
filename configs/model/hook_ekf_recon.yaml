@@ -32,14 +32,14 @@ recon_criterion:
 unc_criterion:
   _target_: src.plugins.head.bayescap.BayesCap1DLoss
   reduction: none
-  lambda_identity: 0.1
+  lambda_identity: 0.
   lambda_nll: 1.0
   identity_mode: l2
   nll_mode: paper
 
 
-epoch_phase: 0
-mask_rate: 0.
+epoch_phase: 30
+mask_rate: 0.3
 
 source_x_range: ${plugins.sigma_z.source_x_range}
 n_source_samples: ${plugins.sigma_z.n_source_samples}

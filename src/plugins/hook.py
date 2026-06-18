@@ -243,7 +243,10 @@ class BreakpointController:
         raise TypeError("target must be either a layer name (str) or an nn.Module")
 
     def gather(self):
-        return [(breakpoint["breakpoint"], (breakpoint["breakpoint"].output, breakpoint["breakpoint"].valid)) for breakpoint in self.breakpoints]
+        return [
+            (bp_info["breakpoint"], (bp_info["breakpoint"].trace.output, bp_info["breakpoint"].trace.valid))
+            for bp_info in self.breakpoints
+        ]
 
     def add_breakpoint(
         self,
@@ -338,17 +341,6 @@ class BreakpointController:
         position: str = "after",
     ):
         return self.add_breakpoint(root=root, target=module, bp=bp, position=position)
-
-    def list_breakpoints(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "layer_name": item["layer_name"],
-                "position": item["position"],
-                "breakpoint_name": item["breakpoint"].name,
-                "module_type": type(item["module"]).__name__,
-            }
-            for item in self.breakpoints
-        ]
 
     def list_breakpoints(self) -> List[Dict[str, Any]]:
         return [

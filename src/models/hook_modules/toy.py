@@ -15,33 +15,10 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
+from src.models.hook_modules.common import HuberLoss, check_gradient
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
-
-def check_gradient(model):
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            if param.grad is not None:
-                # Get a summary metric to avoid console flooding
-                grad_norm = param.grad.norm().item()
-                print(f"Layer: {name: <30} | Gradient Norm: {grad_norm:.6f}")
-            else:
-                print(f"Layer: {name: <30} | Gradient: NONE")
-        else:
-            print(f"Layer: {name: <30} | Gradient: NOT SET")
-
-class HuberLoss(nn.Module):
-    def __init__(self, threshold=0.5):
-        super().__init__()
-        self.threshold = threshold
-    
-    def forward(self, pred, target):
-        l1_norm = torch.abs(target - pred)
-        if l1_norm < self.threshold:
-            return 0.5 * (l1_norm ** 2).mean()
-        else:
-            return (self.threshold * (l1_norm - self.threshold)).mean()
 
 class ModelInjectModule(LightningModule):
     def __init__(self, 
@@ -176,7 +153,7 @@ class ModelInjectModule(LightningModule):
         :return: A tensor of losses between model predictions and targets.
         """
         # Tạm thời tắt reconstruction để đánh giá uncertainty
-        loss, logits, y, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+        loss, logits, y, recon, unc = self.model_step(batch, bp_signal=(1, 1))
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics

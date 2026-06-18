@@ -22,33 +22,10 @@ from src.plugins.sigma_z import SDSigmaZ
 from src.plugins.head.ekf import EKFBiModalInferer
 from src.plugins.head.hessian import *
 from src.plugins.ekf_propagation import full_ekf_propagation_full, make_reconstructor_fn, make_predictor_fn
+from src.models.hook_modules.common import HuberLoss, check_gradient
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
-
-def check_gradient(model):
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            if param.grad is not None:
-                # Get a summary metric to avoid console flooding
-                grad_norm = param.grad.norm().item()
-                print(f"Layer: {name: <30} | Gradient Norm: {grad_norm:.6f}")
-            else:
-                print(f"Layer: {name: <30} | Gradient: NONE")
-        else:
-            print(f"Layer: {name: <30} | Gradient: NOT SET")
-
-class HuberLoss(nn.Module):
-    def __init__(self, threshold=0.5):
-        super().__init__()
-        self.threshold = threshold
-    
-    def forward(self, pred, target):
-        l1_norm = torch.abs(target - pred)
-        if l1_norm < self.threshold:
-            return 0.5 * (l1_norm ** 2).mean()
-        else:
-            return (self.threshold * (l1_norm - self.threshold)).mean()
 
 class ModelEKFInjectModule(LightningModule):
     def __init__(self,
@@ -75,24 +52,23 @@ class ModelEKFInjectModule(LightningModule):
         self.controller = controller
         self.ekf_net = ekf_net
         self.recon_bp = Breakpoint.get_by_name(recon_bp)
-        
-        self.train_loss = MeanMetric()
-        self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
+        self.train_loss = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.val_loss = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.test_loss = nn.ModuleList([MeanMetric() for i in range(4)])
 
-        self.train_recon_loss = MeanMetric()
-        self.val_recon_loss = MeanMetric()
-        self.test_recon_loss = MeanMetric()
+        self.train_recon_loss = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.val_recon_loss = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.test_recon_loss = nn.ModuleList([MeanMetric() for i in range(4)])
 
-        self.train_unc_loss = MeanMetric()
-        self.val_unc_loss = MeanMetric()
-        self.test_unc_loss = MeanMetric()
+        self.train_unc_loss = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.val_unc_loss = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.test_unc_loss = nn.ModuleList([MeanMetric() for i in range(4)])
 
-        self.train_nll = MeanMetric()
-        self.val_nll = MeanMetric()
-        self.test_nll = MeanMetric()
+        self.train_nll = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.val_nll = nn.ModuleList([MeanMetric() for i in range(4)])
+        self.test_nll = nn.ModuleList([MeanMetric() for i in range(4)])
 
-        self.val_nll_best = MinMetric()
+        self.val_nll_best = MinMetric() 
 
         self.criterion = torch.nn.MSELoss(reduction="none")
         self.recon_criterion = recon_criterion
@@ -214,12 +190,10 @@ class ModelEKFInjectModule(LightningModule):
                 {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"], "sigma_pred_sq": sigma_pred_sq.detach()}
     
     # Changing to manual optimize for freedom in model freeze 
-    def manual_optimize(self, recon, unc, batch_idx): 
+    def manual_optimize(self, recon, unc, loss, batch_idx): 
         signal = recon["trace"].trace["signal"]
         [recon_opt, ekf_opt] = self.optimizers()
         [recon_scheduler, ekf_scheduler] = self.lr_schedulers()
-
-
         # ==== Uncertainty Optimization ==== Phase 2
         if self.current_epoch >= self.hparams.epoch_phase:
             self.toggle_optimizer(ekf_opt)
@@ -243,6 +217,7 @@ class ModelEKFInjectModule(LightningModule):
         
         self.toggle_optimizer(recon_opt)
         recon_opt.zero_grad()
+        # Add Loss mean to guide reconstructor to data manifold
         recon_loss = recon["recon_loss"].mean() + recon["unc_loss"].mean()
         self.manual_backward(recon_loss)
         if batch_idx == 0:
@@ -271,35 +246,37 @@ class ModelEKFInjectModule(LightningModule):
         # Tạm thời tắt reconstruction để đánh giá uncertainty
         loss, logits, y, recon, unc = self.model_step(batch)
         signal = recon["trace"].trace["signal"]
+        # Classify metrics to signal 
         signal_str = f"{signal[0]}{signal[1]}"
+        metric_idx = int(signal_str, 2)
         # update and log metrics
-        recon_loss, unc_loss = self.manual_optimize(recon, unc, batch_idx=batch_idx)
-        self.train_loss(loss.mean())
-        self.log(f"train/loss", 
-                 self.train_loss, 
+        recon_loss, unc_loss = self.manual_optimize(recon, unc, loss, batch_idx=batch_idx)
+        self.train_loss[metric_idx](loss.mean())
+        self.log(f"train/loss_{signal_str}" , 
+                 self.train_loss[metric_idx], 
                  on_step=True, 
                  on_epoch=True, 
                  prog_bar=True)
         
-        self.train_recon_loss(recon["recon_loss"].mean())
+        self.train_recon_loss[metric_idx](recon["recon_loss"].mean())
         self.log(f"train/loss_recon_{signal_str}", 
-                    self.train_recon_loss, 
+                    self.train_recon_loss[metric_idx], 
                     on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
-        self.train_unc_loss(recon["unc_loss"].mean())
+        self.train_unc_loss[metric_idx](recon["unc_loss"].mean())
         self.log(f"train/loss_recon_unc_{signal_str}", 
-                    self.train_unc_loss, 
+                    self.train_unc_loss[metric_idx], 
                     on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
 
         # Phase 1: Not propagating uncertainty of deficit inputs
         if self.current_epoch >= self.hparams.epoch_phase:
-            self.train_nll(unc["loss"].mean())
+            self.train_nll[metric_idx](unc["loss"].mean())
             self.log(f"train/loss_unc_{signal_str}",
-                    self.train_nll,
+                    self.train_nll[metric_idx],
                     on_step=True,
                     on_epoch=True,
                     prog_bar=True)
@@ -310,10 +287,10 @@ class ModelEKFInjectModule(LightningModule):
                     on_step=True, on_epoch=True)
             self.log(f"train/sigma_pred_sq_std_{signal_str}", sps.std(),
                     on_step=True, on_epoch=True)
-            self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
-                    on_step=True, on_epoch=True)
-            self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
-                    on_step=True, on_epoch=True)
+            # self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
+            #         on_step=True, on_epoch=True)
+            # self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
+            #         on_step=True, on_epoch=True)
             # return loss or backpropagation will fail, focus on uncertainty loss only
             return recon["unc_loss"].mean()+ recon["recon_loss"].mean() + unc['loss'].mean()
         else:
@@ -353,31 +330,32 @@ class ModelEKFInjectModule(LightningModule):
             loss, logits, _, recon, unc = self.model_step(batch, bp_signal=(1, 1))
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
-        self.val_loss(loss)
+        metric_idx = int(signal_str, 2)
+        self.val_loss[metric_idx](loss)
         self.log(f"val/loss", 
-                 self.val_loss, 
+                 self.val_loss[metric_idx], 
                  on_step=True, 
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.val_recon_loss(recon["recon_loss"].mean())
+        self.val_recon_loss[metric_idx](recon["recon_loss"].mean())
         self.log(f"val/loss_recon_{signal_str}", 
-                    self.val_recon_loss, 
+                    self.val_recon_loss[metric_idx], 
                     on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
-        self.val_unc_loss(recon["unc_loss"].mean())
+        self.val_unc_loss[metric_idx](recon["unc_loss"].mean())
         self.log(f"val/loss_recon_unc_{signal_str}", 
-                    self.val_unc_loss, 
+                    self.val_unc_loss[metric_idx], 
                     on_step=True, 
                     on_epoch=True, 
                     prog_bar=True)
         
         if self.current_epoch >= self.hparams.epoch_phase:
-            self.val_nll(unc["loss"].mean())
+            self.val_nll[metric_idx](unc["loss"].mean())
             self.log(f"val/loss_unc_{signal_str}",
-                    self.val_nll,
+                    self.val_nll[metric_idx],
                     on_step=True,
                     on_epoch=True,
                     prog_bar=True)
@@ -395,7 +373,7 @@ class ModelEKFInjectModule(LightningModule):
         
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
-        score = self.val_nll.compute()  # get current val acc
+        score = min([nll.compute() for nll in self.val_nll])  # get current val acc
         self.val_nll_best(score)  # update best so far val acc
         # log `val_id_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
@@ -416,31 +394,32 @@ class ModelEKFInjectModule(LightningModule):
             loss, logits, y, recon, unc = self.model_step(batch)
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
+        metric_idx = int(signal_str, 2)
         # update and log metrics
         self.test_loss(loss)
         self.log(f"test/loss", 
-                 self.test_loss, 
+                 self.test_loss[metric_idx], 
                  on_step=False, 
                  on_epoch=True, 
                  prog_bar=True)
 
-        self.test_recon_loss(recon["recon_loss"].mean())
+        self.test_recon_loss[metric_idx](recon["recon_loss"].mean())
         self.log(f"test/loss_recon_{signal_str}",
-                    self.test_recon_loss,
+                    self.test_recon_loss[metric_idx],
                     on_step=False,
                     on_epoch=True,
                     prog_bar=True)
 
-        self.test_unc_loss(recon["unc_loss"].mean())
+        self.test_unc_loss[metric_idx](recon["unc_loss"].mean())
         self.log(f"test/loss_recon_unc_{signal_str}",
-                    self.test_unc_loss,
+                    self.test_unc_loss[metric_idx],
                     on_step=True,
                     on_epoch=True,
                     prog_bar=True)
 
-        self.test_nll(unc["loss"].mean())
+        self.test_nll[metric_idx](unc["loss"].mean())
         self.log(f"test/loss_unc_{signal_str}",
-                self.test_nll,
+                self.test_nll[metric_idx],
                 on_step=True,
                 on_epoch=True,
                 prog_bar=True)
@@ -450,10 +429,10 @@ class ModelEKFInjectModule(LightningModule):
                  on_step=True, on_epoch=True)
         self.log(f"test/sigma_pred_sq_std_{signal_str}", sps.std(),
                  on_step=True, on_epoch=True)
-        self.log(f"test/sigma_pred_sq_min_{signal_str}", sps.min(),
-                 on_step=True, on_epoch=True)
-        self.log(f"test/sigma_pred_sq_max_{signal_str}", sps.max(),
-                 on_step=True, on_epoch=True)
+        # self.log(f"test/sigma_pred_sq_min_{signal_str}", sps.min(),
+        #          on_step=True, on_epoch=True)
+        # self.log(f"test/sigma_pred_sq_max_{signal_str}", sps.max(),
+        #          on_step=True, on_epoch=True)
 
     def on_test_epoch_end(self) -> None:
         """Lightning hook that is called when a test epoch ends."""

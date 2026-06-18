@@ -149,7 +149,7 @@ def full_ekf_propagation(
     from torch.func import vmap
 
     # Step 1: Σ_z -> Σ_recon
-    J_f = compute_reconstructor_jacobian(reconstructor_fn, z.unsqueeze_(1)).squeeze_()
+    J_f = compute_reconstructor_jacobian(reconstructor_fn, z.unsqueeze(1)).squeeze(1)
     diag_sigma_recon = propagate_sigma_z_to_sigma_recon(J_f, diag_sigma_z)
     # Compute reconstructed features
     with torch.no_grad():

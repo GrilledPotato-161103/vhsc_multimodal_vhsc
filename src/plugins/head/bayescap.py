@@ -41,7 +41,6 @@ class BayesCap1D(nn.Module):
         eps: float = 1e-6,
     ) -> None:
         super().__init__()
-        print("Initializing")
         if not isinstance(hidden_dims, Sequence):
             hidden_dims = [hidden_dims]
         self.input_dim = input_dim
@@ -62,7 +61,6 @@ class BayesCap1D(nn.Module):
             raise ValueError(f"Unsupported activation: {activation}")
         
         stem_dim = hidden_dims[0]
-        print(stem_dim)
         self.stem = nn.Sequential(
             nn.Linear(input_dim, stem_dim),
             act(),

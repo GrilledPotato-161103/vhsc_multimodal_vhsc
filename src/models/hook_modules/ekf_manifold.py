@@ -22,33 +22,10 @@ from src.plugins.sigma_z import SDSigmaZ
 from src.plugins.head.ekf import EKFBiModalInferer
 from src.plugins.head.hessian import *
 from src.plugins.ekf_propagation import full_ekf_propagation, make_reconstructor_fn, make_predictor_fn
+from src.models.hook_modules.common import HuberLoss, check_gradient
 
 import functools
 torch.serialization.add_safe_globals([functools.partial])
-
-def check_gradient(model):
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            if param.grad is not None:
-                # Get a summary metric to avoid console flooding
-                grad_norm = param.grad.norm().item()
-                print(f"Layer: {name: <30} | Gradient Norm: {grad_norm:.6f}")
-            else:
-                print(f"Layer: {name: <30} | Gradient: NONE")
-        else:
-            print(f"Layer: {name: <30} | Gradient: NOT SET")
-
-class HuberLoss(nn.Module):
-    def __init__(self, threshold=0.5):
-        super().__init__()
-        self.threshold = threshold
-    
-    def forward(self, pred, target):
-        l1_norm = torch.abs(target - pred)
-        if l1_norm < self.threshold:
-            return 0.5 * (l1_norm ** 2).mean()
-        else:
-            return (self.threshold * (l1_norm - self.threshold)).mean()
 
 class ModelEKFManifoldModule(LightningModule):
     def __init__(self,
@@ -185,7 +162,6 @@ class ModelEKFManifoldModule(LightningModule):
         sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
         inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
-
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
                 {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"], "sigma_pred_sq": sigma_pred_sq.detach()}
@@ -200,7 +176,7 @@ class ModelEKFManifoldModule(LightningModule):
         :return: A tensor of losses between model predictions and targets.
         """
         # Tạm thời tắt reconstruction để đánh giá uncertainty
-        loss, logits, y, recon, unc = self.model_step(batch, kwargs={"bp_signal": (1, 1)})
+        loss, logits, y, recon, unc = self.model_step(batch, bp_signal=(1, 1))
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
         # update and log metrics

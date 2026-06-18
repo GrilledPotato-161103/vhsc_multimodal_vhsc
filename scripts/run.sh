@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate ../../venv
+
 set -e
 
 RETRAIN=false
-CONFIG_NAME=""
+CONFIG_MAP=""
 DATA_CONFIG=""
 MODEL_CONFIG=""
 EXTRAS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --config-name)
-            CONFIG_NAME="$2"
+        --config-map)
+            CONFIG_MAP="$2"
             shift 2
             ;;
         --retrain)
@@ -38,7 +37,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$CONFIG_NAME" ]]; then
+if [[ -z "$CONFIG_MAP" ]]; then
     echo "Missing --config-name"
     exit 1
 fi
@@ -48,12 +47,12 @@ if [[ -z "$DATA_CONFIG" ]]; then
     exit 1
 fi
 
-echo "Using config map: $CONFIG_NAME"
+echo "Using config map: $CONFIG_MAP"
 
 if [[ "$RETRAIN" == true ]]; then
     echo "Running retrain..."
     python src/train.py \
-        --config-name "$CONFIG_NAME" \
+        --config-name "$CONFIG_MAP" \
         data="$DATA_CONFIG" \
         $EXTRAS
 else
@@ -64,7 +63,7 @@ else
 
     echo "Running train hook..."
     python src/train_hook.py \
-        --config-name "$CONFIG_NAME" \
+        --config-name "$CONFIG_MAP" \
         data="$DATA_CONFIG" \
         model="$MODEL_CONFIG" \
         $EXTRAS
