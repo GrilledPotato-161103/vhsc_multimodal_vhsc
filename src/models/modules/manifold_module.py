@@ -87,7 +87,7 @@ class ManifoldLightningModule(LightningModule):
         batch: Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         xs_noisy, y, xs, zs = batch
-        print(xs_noisy.shape)
+        # print(xs_noisy.shape)
         y_hat = self.forward(torch.split(xs_noisy, 1, dim=1))
         if y_hat.ndim == 2 and y_hat.shape[-1] == 1:
             y_hat = y_hat.squeeze(-1)
