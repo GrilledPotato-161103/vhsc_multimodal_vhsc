@@ -139,13 +139,16 @@ class ModelEKFInjectModule(LightningModule):
         self.net.eval()
         self.net.requires_grad_(False)
 
-        xs, y, zs = batch
-        xs = [x.unsqueeze(-1) for x in xs]
-        y = y.unsqueeze(-1)
+        xs, y, xs_orig, zs = batch
+        
+        xs = list(torch.split(xs, 1, dim=1))
+        xs_orig = list(torch.split(xs_orig, 1, dim=1))
+        # y = y.unsqueeze(-1)
+        
         # x1 = x1.cuda().unsqueeze(1)
         # x2 = x2.cuda().unsqueeze(1)
         # y = y.cuda().unsqueeze(1)
-
+        
         # Set kwargs for breakpoints, use cache if available
         
         if "bp_signal" in kwargs.keys():

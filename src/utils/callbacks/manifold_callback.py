@@ -39,10 +39,8 @@ class ManifoldVizCallback(pl.Callback):
         tsne_random_state: int = 42,
     ):
         super().__init__()
-        if not isinstance(z_range[0], Sequence):
-            z_range = [z_range]
         if len(z_range) == 1:
-            z_range = z_range * z_dim
+            z_range = list(z_range) * z_dim
 
         self.z_range = z_range
         self.z_dim = z_dim

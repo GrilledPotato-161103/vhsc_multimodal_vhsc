@@ -1,5 +1,5 @@
 target: BiModalRegressor
-model_checkpoint: data/checkpoints/checkpoint_toy_model_v1.pth
+model_checkpoint: data/checkpoints/checkpoint_manifold.pth
 plugins_checkpoint: null
 breakpoints:
   - layer_name: head
@@ -30,7 +30,7 @@ breakpoints:
 # Fitted once at module init on n_source_samples drawn from x_range.
 sigma_z:
   type: "sd"
-  n_source_samples: 1024              # ablation knob: shrink toward 0 -> SF/B-only regime
+  n_source_samples: 128            # ablation knob: shrink toward 0 -> SF/B-only regime
   source_x_range: [-1.0, 1.0]         # range used to draw source samples
   cov_floor: 1.0e-4
 

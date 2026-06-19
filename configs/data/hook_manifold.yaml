@@ -12,10 +12,10 @@ val_ratio: 0.2
 test_ratio: 0.1
 
 # [0, 2pi]
-z_range: [-1., 1.1]
+z_range: [[-1., 1.1]]
 z_dim: 8
 
-z_src_range: [-1., 1.]
+z_src_range: [[-1., 1.]]
 n_src_samples: 256
 
 noise_std: 0.1
