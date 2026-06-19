@@ -3,7 +3,7 @@ _target_: src.data.manifold_datamodule.ManifoldDataModule
 
 x_expressions:
   - "x[0] + 0.5*x[1] - 0.3*x[2] + 0.2*x[3]"
-  - "torch.sin(x[4] + x[5]) + 0.5*x[6] - 0.2*x[7]"
+  - "-0.3*x[2] + 0.2*x[3] + 0.5*x[4] - 0.2*x[5]"
 y_expression: "torch.linalg.norm(x, dim=0, keepdim=True)"
 n_samples: 128000
 batch_size: 128

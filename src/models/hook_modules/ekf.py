@@ -399,7 +399,7 @@ class ModelEKFInjectModule(LightningModule):
         signal_str = f"{signal[0]}{signal[1]}"
         metric_idx = int(signal_str, 2)
         # update and log metrics
-        self.test_loss(loss)
+        self.test_loss[metric_idx](loss)
         self.log(f"test/loss", 
                  self.test_loss[metric_idx], 
                  on_step=False, 
