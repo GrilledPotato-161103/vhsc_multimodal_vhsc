@@ -126,6 +126,12 @@ class ManifoldToyDataset(Dataset):
         sampling: str = "uniform"
     ) -> None:
         super().__init__()
+        if len(z_range) == 1:
+            z_range = list(z_range) * z_dim
+        noise_std = [noise_std] * len(x_expressions) if not isinstance(noise_std, Sequence) else noise_std * x_expressions  if len(noise_std) == 1 else noise_std
+        assert(len(z_range) == z_dim), "Input range for Xs and Y must match the dimension"
+        assert len(noise_std) == len(x_expressions), "Noise must be same shape with input"
+        print(z_range)
         self.n_samples = n_samples
         self.x_expressions = x_expressions
         self.y_expression = y_expression
@@ -135,29 +141,34 @@ class ManifoldToyDataset(Dataset):
         self.noise_ratio = noise_ratio
         self.noise_std = noise_std
         self.dtype = dtype
-
         g = torch.Generator().manual_seed(seed) if not generator else generator
         # Sử dụng Normal distribution để thể hiện rõ hơn về mean và variance thực tế
-        lz, rz = z_range
         if sampling == "normal":
-            self.z = torch.randn([self.z_dim, n_samples], generator=g) * (rz - lz) + lz
+            self.z =  torch.stack([torch.randn(n_samples, generator=g) * (rz - lz) + lz for (lz, rz) in z_range], dim=0)
         else:
-            self.z = torch.empty((self.z_dim, n_samples)).uniform_(lz, rz, generator=g)
+            self.z = torch.stack([torch.empty(n_samples).uniform_(lz, rz, generator=g) for (lz, rz) in z_range], dim=0)
         
-        indexes = torch.bernoulli(torch.full((n_samples,), noise_ratio)).int()
         # Uniform để tối đa hóa entropy
+        self.xs = torch.stack([self._evaluate_expression(x_exp, self.z) for x_exp in self.x_expressions], dim=0)
+
+        noise_std = torch.Tensor(noise_std).unsqueeze_(1)
+        indexes = torch.bernoulli(torch.full_like(self.xs, noise_ratio)).int()
+        print(noise_std.shape, self.xs.shape)
         augment = lambda x: torch.where(indexes > 0, x + noise_std * torch.empty_like(x).uniform_(-1, 1, generator=g), x)
-        self.xs = [self._evaluate_expression(x_exp, self.z) for x_exp in self.x_expressions]
-        self.y = self._evaluate_expression(self.y_expression, self.z)
+
+        # All permute (1, 0) for instance level
+        
+        self.y = self._evaluate_expression(self.y_expression, self.z).permute(1, 0)
         self.z = self.z.permute(1, 0)
-        if noise_std > 0:
-            # Augmenting y seems to break the cycle
-            self.xs = [augment(x) for x in self.xs]
+        self.xs_noisy = augment(self.xs).permute(1, 0)
+        self.xs = self.xs.permute(1, 0)
 
         if self.y.ndim <= 1:
-            self.y = self.y.unsqueeze(1)
-            self.xs = [x.unsqueeze(1) for x in self.xs]
-            
+            self.y = self.y.unsqueeze_(-1)
+
+        if self.xs.ndim <= 1:
+            self.xs = self.xs.unsqueeze_(-1)
+        
         if self.y.shape[0] != n_samples:
             raise ValueError(
                 f"Expression must produce one value per sample. "
@@ -192,7 +203,8 @@ class ManifoldToyDataset(Dataset):
         return self.n_samples
 
     def __getitem__(self, idx: int):
-        xs = [x[idx] for x in self.xs]
+        xs = self.xs[idx]
         y = self.y[idx]
+        xs_noisy = self.xs_noisy[idx]
         z = self.z[idx]
-        return xs, y, z
+        return xs_noisy, y, xs, z

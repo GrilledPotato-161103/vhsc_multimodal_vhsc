@@ -124,7 +124,7 @@ class ModelEKFManifoldModule(LightningModule):
         self.net.eval()
         self.net.requires_grad_(False)
 
-        xs, y, zs = batch
+        xs, y, xs_orig, zs = batch
         # xs = [x.unsqueeze(1) for x in xs]
         # y = y.cuda().unsqueeze(1)
 

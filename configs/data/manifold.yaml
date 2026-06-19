@@ -1,9 +1,10 @@
 _target_: src.data.manifold_datamodule.ManifoldDataModule
 
+
 x_expressions:
-  - "torch.cosh(x[1]) * torch.cos(x[0])"
-  - "torch.cosh(x[1]) * torch.sin(x[0])"
-y_expression: "x[1]"
+  - "x[0] + 0.5*x[1] - 0.3*x[2] + 0.2*x[3]"
+  - "torch.sin(x[4] + x[5]) + 0.5*x[6] - 0.2*x[7]"
+y_expression: "torch.linalg.norm(x, dim=0, keepdim=True)"
 n_samples: 128000
 batch_size: 128
 num_workers: 12
@@ -12,12 +13,12 @@ val_ratio: 0.1
 test_ratio: 0.1
 
 # [0, 2pi]
-z_range: [0.0, 6.2831]
-z_dim: 2
+z_range: [[-1., 1.]]
+z_dim: 8
 
-z_src_range: [0.0, 6.2831]
-n_src_samples: 512
+z_src_range: [[-1., 1.]]
+n_src_samples: 256
 
 noise_std: 0.1
-noise_ratio: 0.3
+noise_ratio: 0.5
 seed: 42
