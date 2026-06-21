@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Tuple, Literal, Sequence
+import os
+import pathlib
 
 import torch
 from torch import nn
@@ -29,27 +31,32 @@ class ManifoldLightningModule(LightningModule):
         compile_model: bool = False,
         loss_name: Literal["mse", "mae", "huber"] = "mse",
         huber_delta: float = 1.0,
-        cache_name: str = "checkpoint"
+        cache_path: str = "checkpoint"
     ) -> None:
         super().__init__()
-
+        self.save_hyperparameters(ignore=["net"])
         self.net = net
-
+        print(self.net)
         self.compile_model = compile_model
         self.loss_name = loss_name
         self.huber_delta = huber_delta
 
         self.val_rmse_best = MinMetric()
         self.val_rmse = MeanMetric()
+        self.cache_path = pathlib.Path(cache_path)
+        print("Saving model to:", self.cache_path.parent)
+        if not os.path.isdir(self.cache_path.parent): 
+            # self.cache_path.mkdir(mode=777,parents=True, exist_ok=True)
+            os.mkdir(self.cache_path.parent)
 
-        self.save_hyperparameters(logger=False, ignore=["net"])
+        
 
     def setup(self, stage: str | None = None) -> None:
         if self.compile_model and stage == "fit":
             self.net = torch.compile(self.net)
 
     def forward(self, xs: Sequence[torch.Tensor]) -> torch.Tensor:
-        return self.net(*xs)
+        return self.net(xs)
 
     def _compute_loss(self, y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         y = y.view_as(y_hat)
@@ -162,10 +169,10 @@ class ManifoldLightningModule(LightningModule):
     
     def on_save_checkpoint(self, checkpoint):
         super().on_save_checkpoint(checkpoint)
-        torch.save(self.net, f"data/checkpoints/{self.hparams.cache_name}.pth")
+        torch.save(self.net, self.hparams.cache_path)
 
     def configure_optimizers(self) -> Dict[str, Any] | torch.optim.Optimizer:
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        optimizer = self.hparams.optimizer(params=self.net.parameters())
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)
             return {

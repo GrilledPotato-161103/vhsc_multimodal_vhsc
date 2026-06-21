@@ -2,7 +2,7 @@
 This file contains only variable and dataclass 
 """
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Callable, Iterable, Tuple, Union, Literal, List
 import torch
 from torch import nn
@@ -108,6 +108,7 @@ class BreakpointContext:
     kwargs: dict
     output: Any = None
     state: Optional[Dict[str, Any]] = None
+    collected: Dict[str, Any] = field(default_factory=dict)  # data from upstream data_sources
 
     def __str__(self) -> str:
         return _format_dataclass(
@@ -123,10 +124,24 @@ class BreakpointContext:
                 "kwargs": self.kwargs,
                 "output": self.output,
                 "state": self.state,
+                "collected": self.collected,
             },
         )
 
     __repr__ = __str__
+
+
+# Specification for an endpoint in the aggregation system
+@dataclass
+class EndpointSpec:
+    module: Optional[nn.Module] = None
+    mode: str = "full"                       # "full" or "eager"
+    required_keys: Tuple[str, ...] = ()      # keys needed before firing (full mode)
+    pack_fn: Optional[Callable] = None       # packs collected dict into (args, kwargs)
+    key: str = ""                            # key in collected dict / endpoint identifier
+    transform: Optional[Callable] = None     # data transform applied before buffering (eager mode)
+    position: str = "after"                  # "before" or "after" (target mode injection point)
+    input_key: Optional[str] = None          # target kwarg name for "before" injection
 
 
 # To store Breakpoint Output

@@ -13,6 +13,10 @@ from torch import nn
 def get_activation(name: Optional[str]) -> nn.Module:
     """Build an activation module from a string identifier.
 
+    All activations are created in **non-inplace** mode so that autograd
+    Jacobian computations (e.g. ``torch.autograd.functional.jacobian``)
+    work correctly — inplace ops break the computation graph.
+
     Args:
         name: Activation name. Supported: "relu", "gelu", "silu"/"swish",
               "tanh", "leaky_relu". None, "none", or "identity" returns Identity.
@@ -30,13 +34,15 @@ def get_activation(name: Optional[str]) -> nn.Module:
     if name == "relu":
         return nn.ReLU(inplace=False)
     if name == "gelu":
-        return nn.GELU(inplace=False)
+        return nn.GELU()  # no inplace kwarg — default is non-inplace
     if name in {"silu", "swish"}:
         return nn.SiLU(inplace=False)
     if name == "tanh":
-        return nn.Tanh(inplace=False)
+        return nn.Tanh()  # no inplace kwarg — default is non-inplace
     if name == "leaky_relu":
         return nn.LeakyReLU(inplace=False)
+    if name == "none":
+        return nn.Identity()
     raise ValueError(f"Unsupported activation: {name}")
 
 

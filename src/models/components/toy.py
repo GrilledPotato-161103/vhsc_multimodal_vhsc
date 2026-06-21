@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 import torch
 from torch import nn
+from torch import Tensor
 
 from src.models.components.common import get_activation, get_normalization
 
@@ -22,7 +23,7 @@ class MLP(nn.Module):
         in_dim: int,
         hidden_dims: list[int],
         out_dim: int,
-        activation: Literal["relu", "gelu", "silu"] = "gelu",
+        activation: Literal["relu", "gelu", "silu", "none"] = "gelu",
         dropout: float = 0.0,
         norm: str = "layer",
         residual: bool = False,
@@ -117,5 +118,59 @@ class BiModalRegressor(nn.Module):
         z1 = self.x1_encoder(x1)
         z2 = self.x2_encoder(x2)
         z = torch.cat([z1, z2], dim=-1)
+        y_hat = self.head(z).squeeze(-1)
+        return y_hat
+
+
+class MultiModalRegressor(nn.Module):
+    def __init__(
+        self,
+        x_dims: int | Sequence[int] = 1,
+        n_modals: int = 2,
+        encoder_hidden_dims: int | Sequence[int] = 64,
+        latent_dim: int = 32,
+        fusion_hidden_dims: Sequence[int] | None = None,
+        out_dim: int = 1,
+        activation: Literal["relu", "gelu", "silu"] = "gelu",
+        dropout: float = 0.0,
+        norm: str = "batch",
+        use_residual: bool = False
+    ) -> None:
+        super().__init__()
+
+        if fusion_hidden_dims is None:
+            fusion_hidden_dims = [128, 64]
+        if not isinstance(x_dims, Sequence):
+            x_dims = [x_dims]
+        if len(x_dims) == 1:
+            x_dims = list(x_dims) * n_modals
+
+        assert len(x_dims) == n_modals, "List of modality dimensions must match no. dims"
+        if not isinstance(encoder_hidden_dims, Sequence):
+            encoder_hidden_dims = [encoder_hidden_dims]
+        
+        self.encoders = nn.ModuleList([
+            MLP(
+                in_dim=x_dim,
+                hidden_dims=encoder_hidden_dims,
+                out_dim=latent_dim,
+                activation=activation,
+                dropout=dropout,
+                norm=norm,
+                residual=use_residual
+                ) for x_dim in x_dims])
+        self.head = nn.Sequential(MLP(
+            in_dim=latent_dim,
+            hidden_dims=fusion_hidden_dims,
+            out_dim=fusion_hidden_dims[-1],
+            activation=activation,
+            dropout=dropout,
+            norm=norm,
+            residual=use_residual
+        ), nn.Linear(fusion_hidden_dims[-1], out_dim))
+
+    def forward(self, xs: Sequence[Tensor]) -> torch.Tensor:
+        zs = [self.encoders[i](x) for i, x in enumerate(xs)]
+        z = torch.stack(zs).sum(dim=0)
         y_hat = self.head(z).squeeze(-1)
         return y_hat

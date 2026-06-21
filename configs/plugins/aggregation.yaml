@@ -1,0 +1,5 @@
+target: MultiModalRegressor
+model_checkpoint: data/checkpoints/toy.pth
+plugins_checkpoint: null
+
+aggregation: 

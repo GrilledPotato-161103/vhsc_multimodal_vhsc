@@ -16,7 +16,7 @@ from torchmetrics.classification.accuracy import Accuracy
 import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 
-from src.plugins.hook import BreakpointController, Breakpoint
+from src.plugins.hook_dag import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
 from src.plugins.sigma_z import SDSigmaZ
 from src.plugins.head.ekf import EKFBiModalInferer

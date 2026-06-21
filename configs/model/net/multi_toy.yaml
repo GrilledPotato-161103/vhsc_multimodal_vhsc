@@ -1,0 +1,10 @@
+_target_: src.models.components.toy.MultiModalRegressor
+x_dims: 1
+n_modals: 2
+encoder_hidden_dims: [16, 16, 16]
+latent_dim: 16
+fusion_hidden_dims: [16, 16, 8, 4]
+activation: relu
+dropout: 0.5
+norm: batch
+use_residual: true

@@ -1,0 +1,88 @@
+# Hook DAG plugin config — MultiModalRegressor with DAG-aware breakpoints
+#
+# Breakpoints declare data_sources (upstream breakpoint names + 'input' for
+# model hook data).  After all breakpoints are added, BreakpointController.wire()
+# resolves these to data_sinks references and validates the DAG for cycles.
+#
+# pre_fn transforms ctx before the callback sees it — useful for adapting
+# DAG-routed collected data to the format existing callbacks expect.
+#
+# Usage:
+#   python src/train_hook_dag.py --config-name train_hook_dag
+
+target: MultiModalRegressor
+model_checkpoint: data/checkpoints/checkpoint_multimodal_manifold.pth
+plugins_checkpoint: null
+
+breakpoints:
+
+  # --- Source breakpoints: capture encoder outputs (non-mutating) ---
+
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_z0
+    pos: after
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_z1
+    pos: after
+
+  # --- Reconstruction breakpoint: collects encoder outputs, adapts via pre_fn ---
+  #
+  # data_sources: [src_z0, src_z1] — individual encoder latents arrive via DAG.
+  # pre_fn: PackCollectedFn      — concatenates sorted tensors into ctx.inputs
+  #                                so BilinearReconstructor sees the format it expects.
+  # mutate: true                 — replaces head input with reconstructed latent.
+
+  - layer_name: head
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: reconstructor
+      data_sources: [src_z0.0, src_z1.0]
+      pre_fn:
+        _target_: src.plugins.hook_dag.ToListCollectedFn
+      post_fn:
+        _target_:  src.plugins.hook_dag.SumPostOp
+      callback:
+        _target_: src.plugins.reconstructor.linear.BilinearReconstructor
+        d_1: 16
+        d_2: 16
+        hidden_dims: [32, 16, 16, 16]
+        activation: silu
+        norm: group
+        dropout: 0.3
+        order: adn
+        concat: false
+        dist: 
+          _target_: torch.nn.MSELoss
+          reduction: none
+      mutate: true
+      valid: true
+    pos: before
+
+  # --- Uncertainty breakpoint: reads head output via 'input' data_source ---
+  #
+  # data_sources: [input]  — 'input' resolves to ctx.output (model's head output).
+  # pre_fn: null            — BayesCap1D already reads ctx.output directly.
+  # mutate: false           — observer only, does not replace head output.
+
+  - layer_name: head
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: uncertainty
+      data_sources: [input]
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        output_dim: 1
+        hidden_dims: [8, 8, 4]
+        per_dim_uncertainty: False
+        dropout: 0.3
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after

@@ -1,0 +1,71 @@
+# @package _global_
+expression: "((x1**2 - x2**2) / (torch.abs(x1) + torch.abs(x2) + 0.1)) * torch.abs(1 - torch.sqrt(x1**2 + x2**2))"
+# specify here default configuration
+# order of defaults determines the order in which configs override each other
+defaults:
+  - _self_
+  - data: hook_manifold
+  - model: hook_dag
+  - plugins: hook_dag
+  - callbacks: hook_manifold
+  - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
+  - trainer: default
+  - paths: default
+  - extras: default
+  - hydra: default
+  # experiment configs allow for version control of specific hyperparameters
+  # e.g. best hyperparameters for given model and datamodule
+  - experiment: null
+
+  # config for hyperparameter optimization
+  - hparams_search: null
+
+  # optional local config for machine/user specific settings
+  # it's optional since it doesn't need to exist and is excluded from version control
+  - optional local: default
+
+  # debugging config (enable through command line, e.g. `python train.py debug=default)
+  - debug: null
+
+data:
+  n_samples: 1280
+  batch_size: 16
+  num_workers: 12
+
+model: 
+  # Set to test two-phase training functionality 
+  epoch_phase: 1
+# task name, determines output directory path
+logger:
+  wandb:
+    project: "VISHC_Uncertainty"
+    name: hook_ekf_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    offline: true
+task_name: "train"
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+  
+  early_stopping:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+
+# tags to help you identify your experiments
+# you can overwrite this in experiment configs
+# overwrite from command line with `python train.py tags="[first_tag, second_tag]"`
+tags: ["dev"]
+
+# set False to skip model training
+train: True
+
+# evaluate on test set, using best model weights achieved during training
+# lightning chooses best weights based on the metric specified in checkpoint callback
+test: True
+
+# simply provide checkpoint path to resume training
+ckpt_path: null
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: null

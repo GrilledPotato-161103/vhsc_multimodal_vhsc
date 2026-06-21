@@ -12,8 +12,15 @@ import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 from src.plugins.var import BreakpointContext, BreakpointOutput, _format_dataclass
 
+# Module-level registry — survives module reimports that would otherwise
+# create a fresh defaultdict if it were a class attribute.
+# _breakpoint_registry: Dict[str, List["Breakpoint"]] = 
+
+
 class Breakpoint(nn.Module):
-    list_of_breakpoints: Dict[str, Breakpoint] = defaultdict(list)
+    # Backward-compatible alias; internal code should reference
+    # _breakpoint_registry directly for clarity.
+    list_of_breakpoints: Dict[str, List["Breakpoint"]] = defaultdict(list)
 
     def __init__(
         self,
@@ -21,7 +28,10 @@ class Breakpoint(nn.Module):
         callback: Optional[Callable[[BreakpointContext], Any]] = None,
         mutate: bool = False,
         valid: bool = False,
-        kwargs: dict  = dict(),
+        kwargs: dict = dict(),
+        data_sources: List[str] | None = None,
+        pre_fn: Optional[Callable[[BreakpointContext], Any]] = None,
+        post_fn: Optional[Callable[[BreakpointContext], Any]] = None,
     ):
         super().__init__()
         self.callback = callback
@@ -29,8 +39,28 @@ class Breakpoint(nn.Module):
         self.valid = valid
         self.trace = None
         self.kwargs = kwargs
+        # DAG wiring: user-declared upstream breakpoint names.
+        # The special value 'input' means "include the model's own
+        # captured data from the hook" (ctx.inputs for before,
+        # ctx.output for after).
+        self.data_sources: List[str] = list(data_sources) if data_sources else []
+        # DAG wiring: downstream breakpoints (resolved by controller.wire())
+        self.data_sinks: List[Breakpoint] = []
+        # Runtime buffer for data pushed from upstream breakpoints
+        self._buffer: Dict[str, Any] = {}
+        # Optional input-preparation callable.  When set, pre_fn(ctx) is
+        # called before callback(ctx) and its return value is passed to
+        # the callback instead of the raw context.
+        self.pre_fn: Optional[Callable[[BreakpointContext], Any]] = pre_fn
+        self.post_fn: Optional[Callable[[BreakpointContext], Any]] = post_fn
         Breakpoint.list_of_breakpoints[name].append(self)
         self.name = f"{name}.{len(Breakpoint.list_of_breakpoints[name]) - 1}"
+        print(f"Added bp: {self.name} to breakpoints list")
+
+    def reset(self) -> None:
+        """Clear runtime buffers between forward passes."""
+        self._buffer.clear()
+        self.trace = None
     
     def __str__(self):
         return _format_dataclass(
@@ -52,10 +82,7 @@ class Breakpoint(nn.Module):
         for k in keys:
             # try index if it's a number
             if k.isdigit():
-                try:
-                    cur = cur[int(k)]
-                except IndexError:
-                    raise IndexError(f"Index {k} is invalid in to breakpoint collection of {len(cur)} entries !!!")
+                cur = cur[int(k)]
             else:
                 cur = cur[k]
         return cur
@@ -68,8 +95,17 @@ class Breakpoint(nn.Module):
         kwargs: dict,
         state=None,
     ):
+        # Source breakpoint (no callback): push raw hook data to sinks
         if self.callback is None:
+            for sink in self.data_sinks:
+                sink._buffer[self.name] = inputs
             return inputs, kwargs
+
+        collected = dict(self._buffer)  # snapshot of upstream data
+
+        # Include model's own captured data if 'input' is in data_sources
+        if "input" in self.data_sources:
+            collected["input"] = inputs
 
         ctx = BreakpointContext(
             name=self.name,
@@ -80,9 +116,20 @@ class Breakpoint(nn.Module):
             kwargs=kwargs,
             bp_kwargs=self.kwargs,
             state=state,
+            collected=collected,
         )
-        result = self.callback(ctx)
+
+        # pre_fn transforms the context before the callback sees it
+        callback_input = self.pre_fn(ctx) if self.pre_fn is not None else ctx
+        result = self.callback(callback_input)
+        
+        if self.post_fn is not None:
+            result = self.post_fn(result)
         self.trace = result
+
+        # Push result to downstream breakpoints (DAG data flow)
+        for sink in self.data_sinks:
+            sink._buffer[self.name] = result.output
         new_inputs = result.output
         if self.mutate and new_inputs is not None:
             if isinstance(new_inputs, tuple):
@@ -99,8 +146,17 @@ class Breakpoint(nn.Module):
         output: Any,
         state=None,
     ):
+        # Source breakpoint (no callback): push raw hook data to sinks
         if self.callback is None:
+            for sink in self.data_sinks:
+                sink._buffer[self.name] = output
             return output
+
+        collected = dict(self._buffer)  # snapshot of upstream data
+
+        # Include model's own captured data if 'input' is in data_sources
+        if "input" in self.data_sources:
+            collected["input"] = output
 
         ctx = BreakpointContext(
             name=self.name,
@@ -112,9 +168,16 @@ class Breakpoint(nn.Module):
             bp_kwargs=self.kwargs,
             output=output,
             state=state,
+            collected=collected,
         )
-        result = self.callback(ctx)
+
+        # pre_fn transforms the context before the callback sees it
+        callback_input = self.pre_fn(ctx) if self.pre_fn is not None else ctx
+        result = self.callback(callback_input)
         self.trace = result
+        # Push result to downstream breakpoints (DAG data flow)
+        for sink in self.data_sinks:
+            sink._buffer[self.name] = result.output
         if self.mutate and result.output is not None:
             return result.output
         return output
@@ -126,14 +189,16 @@ class BreakpointController:
         self.breakpoints: List[Dict[str, Any]] = []
         self.handles: List[Any] = []
         self.state: Dict[str, Any] = {}
+        self._wired: bool = False
 
     @staticmethod
     def __init_dict__(model: nn.Module, cfg: DictConfig) -> BreakpointController:
         controller = BreakpointController()
         assert type(model).__name__ == cfg.target, "Plugins are going to be plugged into wrong model."
-        for item in cfg.breakpoints: 
+        for item in cfg.breakpoints:
             bp = instantiate(item.bp)
             controller.add_breakpoint_by_name(model, item.layer_name, bp, item.pos)
+        controller.wire()
         return controller
 
     @staticmethod
@@ -162,7 +227,8 @@ class BreakpointController:
                 callback=callback,
                 mutate=spec.get("mutate", False),
                 valid=spec.get("valid", False),
-                kwargs=spec.get("kwargs", {})
+                kwargs=spec.get("kwargs", {}),
+                data_sources=spec.get("data_sources", []),
             )
             try:
                 controller.add_breakpoint(
@@ -177,6 +243,7 @@ class BreakpointController:
                     raise
                 skipped.append({"spec": spec, "reason": str(e)})
 
+        controller.wire()
         return controller, {
                                 "loaded": loaded,
                                 "skipped": skipped,
@@ -304,7 +371,96 @@ class BreakpointController:
             }
         )
         self.handles.append(handle)
+        self._wired = False  # adding a breakpoint invalidates wiring
         return handle
+
+    # ------------------------------------------------------------------
+    # DAG wiring
+    # ------------------------------------------------------------------
+
+    def wire(self) -> None:
+        """Resolve all ``data_sources`` names to ``data_sinks`` references.
+
+        Should be called after all breakpoints have been added to the
+        controller.  Skips if already wired (idempotent, reset by
+        :meth:`add_breakpoint`).
+
+        Also runs cycle detection via :meth:`_validate_dag`.
+        """
+        if self._wired:
+            return
+
+        # Clear existing wiring (supports re-wire after add_breakpoint)
+        for item in self.breakpoints:
+            item["breakpoint"].data_sinks.clear()
+
+        # Build name → Breakpoint lookup
+        bp_by_name: Dict[str, Breakpoint] = {}
+        for item in self.breakpoints:
+            bp: Breakpoint = item["breakpoint"]
+            bp_by_name[bp.name] = bp
+
+        # Resolve each breakpoint's data_sources → populate sinks
+        for item in self.breakpoints:
+            bp: Breakpoint = item["breakpoint"]
+            for src_name in bp.data_sources:
+                # 'input' is a runtime keyword resolved from hook data, not a breakpoint
+                if src_name == "input":
+                    continue
+                upstream = bp_by_name.get(src_name)
+                if upstream is None:
+                    # Try base-name fallback via global registry
+                    parts = src_name.split(".")
+                    base = parts[0]
+                    if base in Breakpoint.list_of_breakpoints:
+                        if len(parts) == 1:
+                            upstream = Breakpoint.list_of_breakpoints[base][-1]
+                        else:
+                            try:
+                                idx = int(parts[1])
+                                upstream = Breakpoint.list_of_breakpoints[base][idx]
+                            except (IndexError, ValueError):
+                                pass
+                if upstream is None:
+                    raise ValueError(
+                        f"Breakpoint '{bp.name}' declares data_source "
+                        f"'{src_name}' which does not match any registered "
+                        f"breakpoint. Available: {list(bp_by_name.keys())}"
+                    )
+                upstream.data_sinks.append(bp)
+
+        # Validate DAG (cycle detection)
+        self._validate_dag()
+        self._wired = True
+
+    def _validate_dag(self) -> None:
+        """DFS tricolour cycle detection over ``data_sources``."""
+        # Build adjacency: breakpoint name → list of upstream source names
+        adj: Dict[str, List[str]] = {}
+        for item in self.breakpoints:
+            bp = item["breakpoint"]
+            adj[bp.name] = list(bp.data_sources)
+
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: Dict[str, int] = {name: WHITE for name in adj}
+
+        def dfs(name: str) -> None:
+            color[name] = GRAY
+            for src_name in adj.get(name, []):
+                if src_name == "input" or src_name not in color:
+                    continue  # 'input' is runtime, not a breakpoint
+                if color[src_name] == GRAY:
+                    raise ValueError(
+                        f"Cycle detected in breakpoint DAG: "
+                        f"'{name}' depends on '{src_name}' (back edge)"
+                    )
+                if color[src_name] == WHITE:
+                    dfs(src_name)
+            color[name] = BLACK
+
+        for name in color:
+            if color[name] == WHITE:
+                dfs(name)
 
     def add_breakpoint_by_name(
         self,
@@ -374,6 +530,7 @@ class BreakpointController:
                     "position": item["position"],
                     "mutate": item["breakpoint"].mutate,
                     "callback": item["breakpoint"].callback,
+                    "data_sources": item["breakpoint"].data_sources,
                 }
                 for item in self.breakpoints
             ]
@@ -432,7 +589,8 @@ class BreakpointController:
                 callback=callback,
                 mutate=spec.get("mutate", False),
                 valid=spec.get("valid", False),
-                kwargs=spec.get("kwargs", {})
+                kwargs=spec.get("kwargs", {}),
+                data_sources=spec.get("data_sources", []),
             )
 
             try:
@@ -448,6 +606,7 @@ class BreakpointController:
                     raise
                 skipped.append({"spec": spec, "reason": str(e)})
 
+        self.wire()
         return {
             "loaded": loaded,
             "skipped": skipped,
@@ -457,7 +616,78 @@ class BreakpointController:
         for h in self.handles:
             h.remove()
         self.handles.clear()
+        for item in self.breakpoints:
+            item["breakpoint"].reset()
         self.breakpoints.clear()
+
+# ---------------------------------------------------------------------------
+# Built-in pre_fn utilities
+# ---------------------------------------------------------------------------
+
+class PreprocessCollectedFn(nn.Module):
+    # A general preprocess function for collected contexts
+    def __init__(self, fns: Dict[Callable]): 
+        super().__init__()
+        self.fns = fns
+    
+    def forward(self, ctx: BreakpointContext) -> BreakpointContext: 
+        collected = ctx.collected
+        for key in self.fns.keys():
+            entries = [item[key] for item in collected]
+            setattr(ctx, key, self.fns[key](entries))
+        return ctx
+
+class ConcatCollectedFn(nn.Module):
+    """``pre_fn`` that concatenates all tensors in ``ctx.collected``.
+
+    Packs the collected data into ``ctx.inputs`` so that existing callbacks
+    (e.g. :class:`~src.plugins.reconstructor.linear.BilinearReconstructor`)
+    that read ``ctx.inputs`` can consume DAG-routed data without changes.
+
+    Keys in ``collected`` are sorted alphabetically for deterministic order.
+    """
+
+    def forward(self, ctx: BreakpointContext) -> BreakpointContext:
+        tensors = [
+            v for _, v in sorted(ctx.collected.items())
+            if isinstance(v, torch.Tensor)
+        ]
+        if tensors:
+            ctx.inputs = (torch.cat(tensors, dim=-1),)
+        return ctx
+
+class ToListCollectedFn(nn.Module):
+    def forward(self, ctx: BreakpointContext) -> BreakpointContext:
+        # print(ctx.collected)
+        tensors = [
+            v for _, v in sorted(ctx.collected.items())
+            if isinstance(v, torch.Tensor)
+        ]
+        if tensors:
+            ctx.inputs = tuple(tensors)
+        return ctx
+
+class SumCollectedFn(nn.Module):
+    """``pre_fn`` that element-wise sums all tensors in ``ctx.collected``.
+
+    Useful for :class:`~src.models.components.toy.MultiModalRegressor`
+    whose ``head`` expects a single summed latent vector.
+    """
+
+    def forward(self, ctx: BreakpointContext) -> BreakpointContext:
+        tensors = [
+            v for v in ctx.collected.values()
+            if isinstance(v, torch.Tensor)
+        ]
+        if tensors:
+            ctx.inputs = (torch.stack(tensors).sum(dim=0),)
+        return ctx
+
+class SumPostOp(nn.Module): 
+    def forward(self, res: BreakpointOutput) -> BreakpointOutput:
+        tensors = res.output
+        res.output = (torch.sum(torch.stack(tensors, dim=0), dim=0), )
+        return res
 
 if __name__ == "__main__":
     import torch

@@ -13,7 +13,7 @@ from torchmetrics.classification.accuracy import Accuracy
 import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 
-from src.plugins.hook import BreakpointController, Breakpoint
+from src.plugins.hook_dag import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
 from src.models.hook_modules.common import HuberLoss, check_gradient
 
@@ -40,7 +40,6 @@ class ModelInjectModule(LightningModule):
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller"])
         self.net = net
         self.controller = controller
-        
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
         self.test_loss = MeanMetric()
@@ -71,7 +70,7 @@ class ModelInjectModule(LightningModule):
         """
             Perform forward on hooked model
         """
-        return self.net(*xs)
+        return self.net(xs)
 
     def on_train_start(self):
         # Prevent training on training phase
@@ -93,7 +92,7 @@ class ModelInjectModule(LightningModule):
         # Include bp_kwargs in Dataset for breakpoint manipulation
         self.net.eval()
         self.net.requires_grad_(False)
-        (x1, x2), y, _ = batch
+        xs, y, _, _ = batch
         # if x1.ndim == 1:
         #     x1 = x1.unsqueeze(-1)
         # if x2.ndim == 1:
@@ -114,7 +113,7 @@ class ModelInjectModule(LightningModule):
         recon_bp = Breakpoint.get_by_name(self.hparams.recon_bp)
         recon_bp.kwargs = tuple(bp_signal)
         # print(recon_bp.kwargs)
-        logits = self.forward((x1, x2)).unsqueeze(1)
+        logits = self.forward(torch.split(xs, 1, dim=1)).unsqueeze(1)
         loss = self.criterion(logits, y)
         recon_trace = recon_bp.trace
         sigs = recon_trace.trace["signal"]
@@ -213,8 +212,9 @@ class ModelInjectModule(LightningModule):
             check_gradient(self.net)
             for item in self.controller.breakpoints:
                 pos, bp = item['position'], item["breakpoint"]
-                print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
-                check_gradient(bp.callback)
+                if isinstance(bp.callback, nn.Module):
+                    print(f"Checking {bp.name} module on {pos}: {bp.callback.__class__.__qualname__}")
+                    check_gradient(bp.callback)
 
         return super().optimizer_step(
                                         epoch,
@@ -367,8 +367,9 @@ class ModelInjectModule(LightningModule):
         parameters = list(self.trainer.model.parameters())
         for item in self.controller.breakpoints:
             bp = item["breakpoint"]
-            print(f"Assigning {bp.name} breakpoints to Optimizer for update")
-            parameters = parameters + list(bp.callback.parameters())
+            if isinstance(bp.callback, nn.Module):
+                print(f"Assigning {bp.name} breakpoints to Optimizer for update")
+                parameters = parameters + list(bp.callback.parameters())
 
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
