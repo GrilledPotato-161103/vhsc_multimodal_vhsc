@@ -1,0 +1,3 @@
+[submodule "submodules/Neuro-JEPA"]
+	path = submodules/Neuro-JEPA
+	url = https://github.com/NYUMedML/Neuro-JEPA.git
