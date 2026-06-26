@@ -1,0 +1,67 @@
+# @package _global_
+# Train JEPA Multi-Modal Hook DAG Pipeline
+#
+# Trains reconstruction and uncertainty estimation hooks on a frozen
+# Neuro-JEPA multi-modal classification backbone using the DAG-enhanced
+# Breakpoint system from src/plugins/hook_dag.py.
+#
+# The backbone is loaded from HuggingFace Hub (NYUMedML/Neuro-JEPA).
+# Only hook callbacks (reconstructor + BayesCap1D) are trained.
+#
+# Usage:
+#   python src/train_hook_jepa.py --config-name train_hook_jepa
+#   python src/train_hook_jepa.py --config-name train_hook_jepa model.epoch_phase=5
+
+defaults:
+  - _self_
+  - data: hook_manifold
+  - model: hook_jepa
+  - plugins: hook_jepa
+  - callbacks: hook_manifold
+  - logger: wandb
+  - trainer: default
+  - paths: default
+  - extras: default
+  - hydra: default
+  - experiment: null
+  - hparams_search: null
+  - optional local: default
+  - debug: null
+
+# --- Data (minimal settings to prevent OOM) ---
+data:
+  n_samples: 128
+  batch_size: 1
+  num_workers: 0
+  val_ratio: 0.2
+  test_ratio: 0.1
+
+# --- Model ---
+model:
+  epoch_phase: 10
+  mask_rate: 0.3
+  n_modals: 2
+
+# --- Logger ---
+logger:
+  wandb:
+    project: "VISHC_JEPA_Uncertainty"
+    name: hook_jepa_model_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    offline: true
+
+task_name: "train"
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+  early_stopping:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+
+tags: ["jepa", "hook_dag", "uncertainty", "pretrained"]
+
+train: True
+test: True
+ckpt_path: null
+seed: null

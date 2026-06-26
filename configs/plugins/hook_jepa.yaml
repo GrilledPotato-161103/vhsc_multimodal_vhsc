@@ -1,0 +1,102 @@
+# Hook DAG plugin config — MultiModalJEPARegressor with DAG-aware breakpoints
+#
+# DAG flow:
+#   encoders.0 (after)  ─┐
+#                         ├──► classifier (before, mutate) ──► classifier (after)
+#   encoders.1 (after)  ─┘    [reconstructor]                  [uncertainty]
+#
+# The reconstructor receives per-modality ViT token features via DAG,
+# reconstructs missing modalities, and mutates the classifier inputs.
+# The uncertainty head reads classifier logits via the 'input' data_source.
+#
+# Usage:
+#   python src/train_hook_jepa.py --config-name train_hook_jepa
+
+target: MultiModalJEPARegressor
+
+# --- Model loading ---------------------------------------------------------
+# HF Hub repo ID or local checkpoint path
+model_checkpoint: NYUMedML/Neuro-JEPA
+
+# Optional plugin checkpoint for resuming hook training
+plugins_checkpoint: null
+
+# Modality configuration
+modality_keys: ["t1w", "t2w"]
+image_size: [96, 108, 96]     # [D, H, W] for ViT backbone
+num_classes: 2
+
+# HuggingFace settings (hf_token=true uses cached login)
+hf_token: true
+hf_revision: null
+hf_cache_dir: null
+
+# --- Breakpoints -----------------------------------------------------------
+
+breakpoints:
+
+  # Source: modality 0 ViT token features [B, N, embed_dim]
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_z0
+    pos: after
+
+  # Source: modality 1 ViT token features [B, N, embed_dim]
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_z1
+    pos: after
+
+  # --- Reconstruction breakpoint (before classifier, mutating) ---
+  #
+  # data_sources: [src_z0.0, src_z1.0] — ViT token features arrive via DAG.
+  # pre_fn: ToListCollectedFn — converts collected dict to tuple for callback.
+  # mutate: true — replaces classifier inputs with reconstructed features.
+
+  - layer_name: classifier
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: reconstructor
+      data_sources: [src_z0.0, src_z1.0]
+      pre_fn:
+        _target_: src.plugins.hook_dag.ToListCollectedFn
+      callback:
+        _target_: src.plugins.reconstructor.jepa_classification.JEPAClassificationReconstructor
+        d_1: 768     # vit_base embed_dim
+        d_2: 768     # vit_base embed_dim
+        hidden_dims: [1024, 768, 768, 768]
+        activation: silu
+        norm: layer
+        dropout: 0.2
+        order: adn
+        dist:
+          _target_: torch.nn.MSELoss
+          reduction: none
+      mutate: true
+      valid: true
+    pos: before
+
+  # --- Uncertainty breakpoint (after classifier, observing) ---
+  #
+  # data_sources: [input] — 'input' resolves to ctx.output (classifier logits).
+  # BayesCap1D predicts per-class GGD parameters (mu, alpha, beta).
+
+  - layer_name: classifier
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: uncertainty
+      data_sources: [input]
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 2       # num_classes
+        output_dim: 2      # num_classes
+        hidden_dims: [64, 32, 16]
+        per_dim_uncertainty: true
+        dropout: 0.2
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after
