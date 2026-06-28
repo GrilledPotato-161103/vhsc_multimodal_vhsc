@@ -1,0 +1,14 @@
+# @package _global_
+# Attempt D2: larger head + lambda=2.0 — sweet spot search
+defaults:
+  - override /model/ekf_net: default
+model:
+  ekf_net:
+    use_aleatoric: true
+    aleatoric_hidden_dim: 64
+    aleatoric_n_layers: 2
+    lambda_aleatoric: 2.0
+logger:
+  wandb:
+    name: "aleatoric_D2_hdim64_lam2_${now:%H-%M-%S}"
+    tags: ["aleatoric", "D2", "hdim64_lam2"]

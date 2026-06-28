@@ -1,0 +1,14 @@
+# @package _global_
+# Attempt B3: lambda=0.5 — intermediate
+defaults:
+  - override /model/ekf_net: default
+model:
+  ekf_net:
+    use_aleatoric: true
+    aleatoric_hidden_dim: 32
+    aleatoric_n_layers: 2
+    lambda_aleatoric: 0.5
+logger:
+  wandb:
+    name: "aleatoric_B3_lam05_${now:%H-%M-%S}"
+    tags: ["aleatoric", "B3", "lam0.5"]

@@ -17,7 +17,7 @@ rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath
 
 from src.plugins.hook import BreakpointController, Breakpoint
 from src.plugins.head.bayescap import BayesCap1DLoss, bayescap_variance_1d
-from src.plugins.sigma_z import SDSigmaZ
+from src.plugins.sigma_z import SDSigmaZ, CycleSigmaZ, GMMSigmaZ, PCASigmaZ
 from src.plugins.head.ekf import EKFGGDNLLLoss, EKFBiModalInferer
 from src.plugins.ekf_propagation import full_ekf_propagation_full, make_reconstructor_fn, make_predictor_fn
 
@@ -67,6 +67,9 @@ class ModelEKFInjectModule(LightningModule):
                  n_jumps: int = 8,
                  source_x_range: tuple = (-1.0, 1.0),
                  n_source_samples: int = 5000,
+                 sigma_z_type: str = "sd",
+                 lambda_aux: float = 0.0,
+                 aux_mode: str = "linear",
                  ) -> None:
         super().__init__()
         self.save_hyperparameters(logger=False, ignore=["retcon_criterion", "unc_criterion", "net", "controller", "ekf_net"])
@@ -102,16 +105,23 @@ class ModelEKFInjectModule(LightningModule):
         enc2 = self.net.x2_encoder
 
         self.ekf_net = self.ekf_net(self.recon_bp.callback, self.net.head)
-        # Per-sample SD-setting input-shift covariance provider.
-        # Fits N(mu_A, Sigma_A) on source latents once at init; computes
-        # Sigma_z(z) = (d_M^2(z) / d_z) * Sigma_A per batch at training time.
-        self.sigma_z_provider = SDSigmaZ(
-            encoder1=enc1,
-            encoder2=enc2,
-            x_range=tuple(source_x_range),
-            n_source_samples=n_source_samples,
-            device=("cuda" if torch.cuda.is_available() else "cpu"),
-        )
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        kw = dict(encoder1=enc1, encoder2=enc2,
+                  x_range=tuple(source_x_range),
+                  n_source_samples=n_source_samples, device=dev)
+        t = sigma_z_type
+        if t == "sd":
+            self.sigma_z_provider = SDSigmaZ(**kw)
+        elif t == "cycle":
+            self.sigma_z_provider = CycleSigmaZ(**kw)
+        elif t == "cycle_iso":
+            self.sigma_z_provider = CycleSigmaZ(**kw, phi_mode="identity")
+        elif t == "gmm":
+            self.sigma_z_provider = GMMSigmaZ(**kw)
+        elif t == "pca":
+            self.sigma_z_provider = PCASigmaZ(**kw)
+        else:
+            raise ValueError(f"Unknown sigma_z_type: {t!r}")
     
     def _evaluate_expression(self, x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
         """
@@ -209,16 +219,43 @@ class ModelEKFInjectModule(LightningModule):
             recon_loss += self.recon_criterion(rec, src)
             recon_unc_loss += self.criterion(dev, dist)
 
-        # EKF Propagation. sigma_z is per-sample full covariance from the
-        # SD-setting provider (Mahalanobis-scaled source covariance).
+        # EKF Propagation. sigma_z is per-sample full covariance.
+        # CycleSigmaZ needs raw inputs; other providers ignore x1/x2.
         z = torch.cat(srcs, dim=-1).detach()
-        sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
-        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, signal=sigs)
+        sigma_z = self.sigma_z_provider(z, x1=x1, x2=x2)  # (B, d_z, d_z)
+        # xy = raw input coords for aleatoric head when input_mode='xy'
+        xy = torch.cat([x1, x2], dim=-1)  # (B, 2)
+        inv_alpha, beta, sigma_ep, sigma_al = self.ekf_net(z, sigma_z, signal=sigs, xy=xy)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
+
+        # Auxiliary regression loss: supervise sigma_TOTAL to match (y-ŷ)².
+        # sigma_total = sigma_ep + lambda_al * sigma_al should explain the full residual.
+        # Supervising sigma_al alone against (y-ŷ)² was wrong — it caused sigma_al
+        # to absorb the OOD-driven epistemic error that sigma_ep already covers,
+        # producing an OOD ramp in the aleatoric map (leak from sigma_ep's signal).
+        # By supervising sigma_total, sigma_al only needs to cover what sigma_ep misses.
+        if self.hparams.lambda_aux > 0.0:
+            lam = float(getattr(self.ekf_net, 'lambda_aleatoric', 1.0))
+            sigma_total_for_aux = sigma_ep.detach() + lam * sigma_al   # (B, 1)
+            residual_sq = loss.detach()                                  # (B, 1)
+            if getattr(self.hparams, 'aux_mode', 'linear') == 'log':
+                # Log-space: scale-invariant, equalizes gradient weight across error
+                # magnitudes -> redistributes from the OOD tail to the ID bulk,
+                # which lifts rank (Spearman) alignment.
+                eps = 1e-6
+                aux_loss = torch.nn.functional.mse_loss(
+                    torch.log(sigma_total_for_aux + eps),
+                    torch.log(residual_sq + eps))
+            else:
+                aux_loss = torch.nn.functional.mse_loss(sigma_total_for_aux, residual_sq)
+        else:
+            aux_loss = sigma_al.new_tensor(0.0)
 
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
-                {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"], "sigma_pred_sq": sigma_pred_sq.detach()}
+                {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"],
+                 "sigma_ep": sigma_ep.detach(), "sigma_al": sigma_al.detach(),
+                 "aux_loss": aux_loss}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -266,20 +303,22 @@ class ModelEKFInjectModule(LightningModule):
                 on_epoch=True,
                 prog_bar=True)
 
-        # EKF diagnostics: mean = magnitude, std = per-sample spread.
-        # std ~ 0 means the chain collapses sigma_pred to a constant.
-        sps = unc["sigma_pred_sq"].detach().flatten()
-        self.log(f"train/sigma_pred_sq_mean_{signal_str}", sps.mean(),
-                 on_step=True, on_epoch=True)
-        self.log(f"train/sigma_pred_sq_std_{signal_str}", sps.std(),
-                 on_step=True, on_epoch=True)
-        self.log(f"train/sigma_pred_sq_min_{signal_str}", sps.min(),
-                 on_step=True, on_epoch=True)
-        self.log(f"train/sigma_pred_sq_max_{signal_str}", sps.max(),
-                 on_step=True, on_epoch=True)
-        # return loss or backpropagation will fail, focus on uncertainty loss only
+        # EKF diagnostics: epistemic (EKF) + aleatoric (learned) components.
+        # Use lambda_aleatoric to compute the actual sigma_total (matching forward pass).
+        lam = float(getattr(self.ekf_net, 'lambda_aleatoric', 1.0))
+        sep = unc["sigma_ep"].flatten(); sal = unc["sigma_al"].flatten()
+        sigma_total = sep + lam * sal
+        self.log(f"train/sigma_ep_mean_{signal_str}",  sep.mean(), on_step=True, on_epoch=True)
+        self.log(f"train/sigma_al_mean_{signal_str}",  sal.mean(), on_step=True, on_epoch=True)
+        self.log(f"train/sigma_total_mean_{signal_str}", sigma_total.mean(), on_step=True, on_epoch=True)
+        self.log(f"train/sigma_total_std_{signal_str}",  sigma_total.std(),  on_step=True, on_epoch=True)
+        self.log(f"train/sigma_al_frac_{signal_str}",
+                 (sal / (sigma_total + 1e-8)).mean(), on_step=True, on_epoch=True)
+        aux = unc["aux_loss"]
+        if self.hparams.lambda_aux > 0.0:
+            self.log(f"train/loss_aux_{signal_str}", aux.detach(), on_step=True, on_epoch=True)
 
-        return recon["unc_loss"].mean() + unc['loss'].mean()
+        return recon["unc_loss"].mean() + unc['loss'].mean() + self.hparams.lambda_aux * aux
     
     def optimizer_step(
         self,
@@ -356,15 +395,14 @@ class ModelEKFInjectModule(LightningModule):
                 on_epoch=True,
                 prog_bar=True)
 
-        sps = unc["sigma_pred_sq"].detach().flatten()
-        self.log(f"val/sigma_pred_sq_mean_{signal_str}", sps.mean(),
-                 on_step=True, on_epoch=True)
-        self.log(f"val/sigma_pred_sq_std_{signal_str}", sps.std(),
-                 on_step=True, on_epoch=True)
-        self.log(f"val/sigma_pred_sq_min_{signal_str}", sps.min(),
-                 on_step=True, on_epoch=True)
-        self.log(f"val/sigma_pred_sq_max_{signal_str}", sps.max(),
-                 on_step=True, on_epoch=True)
+        sep = unc["sigma_ep"].flatten(); sal = unc["sigma_al"].flatten()
+        sigma_total = sep + sal
+        self.log(f"val/sigma_ep_mean_{signal_str}",    sep.mean(), on_step=True, on_epoch=True)
+        self.log(f"val/sigma_al_mean_{signal_str}",    sal.mean(), on_step=True, on_epoch=True)
+        self.log(f"val/sigma_total_mean_{signal_str}", sigma_total.mean(), on_step=True, on_epoch=True)
+        self.log(f"val/sigma_total_std_{signal_str}",  sigma_total.std(),  on_step=True, on_epoch=True)
+        self.log(f"val/sigma_al_frac_{signal_str}",
+                 (sal / (sigma_total + 1e-8)).mean(), on_step=True, on_epoch=True)
         return (loss, logits, recon, unc)
         
     def on_validation_epoch_end(self) -> None:
@@ -375,10 +413,6 @@ class ModelEKFInjectModule(LightningModule):
         # otherwise metric would be reset by lightning after each epoch
         self.log("val/loss_nll_best", self.val_nll_best.compute(), sync_dist=True, prog_bar=True)
 
-    def on_test_epoch_start(self):
-        print("Testing and Ablation study on epoch", self.current_epoch)
-        return super().on_test_epoch_start()
-    
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
         """Perform a single test step on a batch of data from the test set.
 
@@ -390,6 +424,9 @@ class ModelEKFInjectModule(LightningModule):
             loss, logits, y, recon, unc = self.model_step(batch)
         signal = recon["trace"].trace["signal"]
         signal_str = f"{signal[0]}{signal[1]}"
+        # Stash raw input coords for smoothed-error PCC at epoch end.
+        (x1b, x2b), _yb = batch
+        self._test_pos.append(torch.stack([x1b.flatten(), x2b.flatten()], dim=-1).cpu())
         # update and log metrics
         self.test_loss(loss)
         self.log(f"test/loss", 
@@ -419,20 +456,103 @@ class ModelEKFInjectModule(LightningModule):
                 on_epoch=True,
                 prog_bar=True)
 
-        sps = unc["sigma_pred_sq"].detach().flatten()
-        self.log(f"test/sigma_pred_sq_mean_{signal_str}", sps.mean(),
-                 on_step=True, on_epoch=True)
-        self.log(f"test/sigma_pred_sq_std_{signal_str}", sps.std(),
-                 on_step=True, on_epoch=True)
-        self.log(f"test/sigma_pred_sq_min_{signal_str}", sps.min(),
-                 on_step=True, on_epoch=True)
-        self.log(f"test/sigma_pred_sq_max_{signal_str}", sps.max(),
-                 on_step=True, on_epoch=True)
+        lam = float(getattr(self.ekf_net, 'lambda_aleatoric', 1.0))
+        sep = unc["sigma_ep"].flatten(); sal = unc["sigma_al"].flatten()
+        sigma_total = sep + lam * sal
+        self.log(f"test/sigma_ep_mean_{signal_str}",    sep.mean(), on_step=True, on_epoch=True)
+        self.log(f"test/sigma_al_mean_{signal_str}",    sal.mean(), on_step=True, on_epoch=True)
+        self.log(f"test/sigma_total_mean_{signal_str}", sigma_total.mean(), on_step=True, on_epoch=True)
+        self.log(f"test/sigma_al_frac_{signal_str}",
+                 (lam * sal / (sigma_total + 1e-8)).mean(), on_step=True, on_epoch=True)
+
+        # Accumulate for a GLOBAL PCC at epoch end (per-batch PCC is biased for small B).
+        self._test_err.append(loss.detach().flatten().cpu())
+        self._test_var.append(unc["var"].detach().flatten().cpu())
+        self._test_total.append(sigma_total.detach().flatten().cpu())
+        self._test_ep.append(sep.detach().cpu())
+        self._test_al.append(sal.detach().cpu())
+
+    def on_test_epoch_start(self):
+        self._test_err, self._test_var = [], []
+        self._test_total, self._test_ep, self._test_al = [], [], []
+        self._test_pos = []
+        print("Testing and Ablation study on epoch", self.current_epoch)
+        return super().on_test_epoch_start()
 
     def on_test_epoch_end(self) -> None:
-        """Lightning hook that is called when a test epoch ends."""
-        print("Parsing results !!!!!")
-        pass
+        """Compute global Pearson correlation between uncertainty and prediction error."""
+        def _pcc(a, b):
+            a = a.float(); b = b.float()
+            am, bm = a - a.mean(), b - b.mean()
+            denom = (am.pow(2).sum().sqrt() * bm.pow(2).sum().sqrt()).clamp_min(1e-8)
+            return ((am * bm).sum() / denom).item()
+
+        def _spearman(a, b):
+            ar = a.float().argsort().argsort().float()
+            br = b.float().argsort().argsort().float()
+            return _pcc(ar, br)
+
+        err = torch.cat(self._test_err)          # (N,) squared error
+        var = torch.cat(self._test_var)          # (N,) predictive variance (bayescap)
+        tot = torch.cat(self._test_total)        # (N,) sigma_total = sep + lam*sal
+        sep = torch.cat(self._test_ep)
+        sal = torch.cat(self._test_al)
+        pos = torch.cat(self._test_pos)          # (N, 2) input coords
+
+        # Smoothed/expected error E[err|x] via grid-binning the input space.
+        # Proves whether the per-sample PCC ceiling is data noise: if the model
+        # tracks the EXPECTED error well, the per-sample gap is irreducible noise.
+        def _cell_means(positions, values, n_bins):
+            """Return (cell_mean_per_sample, cell_level_means, cell_ids, counts)."""
+            p = positions.float()
+            lo = p.amin(0); hi = p.amax(0)
+            idx = ((p - lo) / (hi - lo + 1e-8) * (n_bins - 1)).long().clamp(0, n_bins - 1)
+            flat = idx[:, 0] * n_bins + idx[:, 1]
+            n_cells = n_bins * n_bins
+            sums = torch.zeros(n_cells).scatter_add_(0, flat, values.float())
+            cnts = torch.zeros(n_cells).scatter_add_(0, flat, torch.ones_like(values.float()))
+            cell_mean = sums / cnts.clamp_min(1.0)
+            return cell_mean[flat], cell_mean, flat, cnts
+
+        # Per-sample smoothed error (fine bins, as before — kept for comparison).
+        err_smooth, _, _, _ = _cell_means(pos, err, 20)
+
+        # CELL-LEVEL structural correlation: aggregate BOTH var and err into coarse
+        # cells, correlate the cell-means. This is the rigorous spatial-structure test
+        # with strong noise averaging (~30+ samples/cell at n_bins=8).
+        def _cell_pcc(n_bins):
+            _, var_cells, _, cnts = _cell_means(pos, var, n_bins)
+            _, err_cells, _, _    = _cell_means(pos, err, n_bins)
+            mask = cnts > 0
+            return _pcc(var_cells[mask], err_cells[mask]), _spearman(var_cells[mask], err_cells[mask])
+
+        cell_pcc8,  cell_sp8  = _cell_pcc(8)
+        cell_pcc12, cell_sp12 = _cell_pcc(12)
+
+        results = {
+            "test/PCC_predvar_err":      _pcc(var, err),
+            "test/PCC_total_err":        _pcc(tot, err),
+            "test/PCC_ep_err":           _pcc(sep, err),
+            "test/PCC_al_err":           _pcc(sal, err),
+            "test/Spearman_predvar_err": _spearman(var, err),
+            "test/Spearman_total_err":   _spearman(tot, err),
+            # vs SMOOTHED (expected) error — the ceiling test
+            "test/PCC_predvar_errSmooth":      _pcc(var, err_smooth),
+            "test/Spearman_predvar_errSmooth": _spearman(var, err_smooth),
+            "test/PCC_al_errSmooth":           _pcc(sal, err_smooth),
+            # CELL-LEVEL structural correlation (E[var|cell] vs E[err|cell])
+            "test/CellPCC_8":  cell_pcc8,
+            "test/CellSpearman_8":  cell_sp8,
+            "test/CellPCC_12": cell_pcc12,
+            "test/CellSpearman_12": cell_sp12,
+        }
+        for k, v in results.items():
+            self.log(k, v, sync_dist=True)
+        # Print so it shows up directly in slurm logs.
+        print("\n===== TEST CORRELATIONS (uncertainty vs squared error) =====")
+        for k, v in results.items():
+            print(f"  {k:32s} = {v:+.4f}")
+        print("=============================================================\n")
 
     def setup(self, stage: str) -> None:
         """Lightning hook that is called at the beginning of fit (train + validate), validate,
@@ -466,6 +586,8 @@ class ModelEKFInjectModule(LightningModule):
         parameters += list(self.unc_criterion.parameters())
         parameters += list(self.ekf_net.inv_alpha_net.parameters())
         parameters += list(self.ekf_net.beta_net.parameters())
+        if self.ekf_net.aleatoric_net is not None:
+            parameters += list(self.ekf_net.aleatoric_net.parameters())
         optimizer = self.hparams.optimizer(params=parameters)
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)

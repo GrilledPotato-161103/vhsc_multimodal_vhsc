@@ -1,95 +1,279 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.func import jacrev
 
 
+# ---------------------------------------------------------------------------
+# Shared helper: fit source latents given encoders + x_range
+# ---------------------------------------------------------------------------
+
+def _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device):
+    """Draw source samples, encode, return (z_A, x1_A, x2_A)."""
+    a, b = x_range
+    gen = torch.Generator(device=device).manual_seed(0)
+    x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+    x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+    was1, was2 = encoder1.training, encoder2.training
+    encoder1.eval(); encoder2.eval()
+    with torch.no_grad():
+        z1 = encoder1(x1)
+        z2 = encoder2(x2)
+    if was1: encoder1.train()
+    if was2: encoder2.train()
+    return torch.cat([z1, z2], dim=-1), x1, x2, z1, z2
+
+
+def _fit_sigma_A(z_A, cov_floor, shrinkage, device):
+    """Fit shrunk, eigen-clamped Gaussian to source latents. Returns (mu, Sigma, Sigma_inv)."""
+    d_z = z_A.shape[1]
+    mu_A = z_A.mean(0)
+    centered = z_A - mu_A
+    sigma_A = (centered.T @ centered) / (z_A.shape[0] - 1)
+    eye = torch.eye(d_z, device=device)
+    mean_var = sigma_A.diagonal().mean()
+    sigma_A = (1.0 - shrinkage) * sigma_A + shrinkage * mean_var * eye
+    sigma_A = sigma_A + cov_floor * eye
+    evals, evecs = torch.linalg.eigh(sigma_A)
+    evals = evals.clamp_min(cov_floor)
+    sigma_A_inv = (evecs / evals) @ evecs.T
+    print(f"  Sigma_A: min_eval={evals.min():.3e}  max_eval={evals.max():.3e}  "
+          f"cond={evals.max()/evals.min():.3e}")
+    return mu_A, sigma_A, sigma_A_inv
+
+
 class SDSigmaZ(nn.Module):
-    """Source-dependent input-shift covariance provider (Option B in the formalism).
+    """Single-Gaussian Mahalanobis, formalism doc 01."""
 
-    Fits a single Gaussian N(mu_A, Sigma_A) on source latents at init time, then
-    at inference returns per-sample full Sigma_z(z) = (d_M^2(z) / d_z) * Sigma_A,
-    with d_M^2 the Mahalanobis distance from z to (mu_A, Sigma_A).
-
-    Properties:
-      - In-distribution: E[d_M^2 / d_z] = 1, so Sigma_z ~ Sigma_A on average.
-      - OOD: d_M^2 grows, Sigma_z is amplified in directions Sigma_A spans.
-      - PSD by construction: non-negative scalar times PSD matrix.
-
-    See formalism/01_input_shift_measurement.md for the derivation.
-    """
-
-    def __init__(self,
-                 encoder1: nn.Module,
-                 encoder2: nn.Module,
-                 x_range: tuple = (-1.0, 1.0),
-                 n_source_samples: int = 5000,
-                 device: str = "cuda",
-                 cov_floor: float = 1e-4,
-                 shrinkage: float = 0.1):
+    def __init__(self, encoder1, encoder2, x_range=(-1., 1.),
+                 n_source_samples=5000, device="cuda",
+                 cov_floor=1e-4, shrinkage=0.1):
         super().__init__()
-        self.x_range = x_range
-        self.n_source_samples = n_source_samples
-        self.cov_floor = cov_floor
-        self.shrinkage = shrinkage
-
-        a, b = x_range
-        # Deterministic source-sample fit: same mu_A / sigma_A across runs.
-        gen = torch.Generator(device=device).manual_seed(0)
-        x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
-        x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
-        # Make sure source encoding sees BN in eval mode (running stats only).
-        was_training1, was_training2 = encoder1.training, encoder2.training
-        encoder1.eval(); encoder2.eval()
-        with torch.no_grad():
-            z1 = encoder1(x1)  # (N, d_z/2)
-            z2 = encoder2(x2)  # (N, d_z/2)
-        if was_training1: encoder1.train()
-        if was_training2: encoder2.train()
-        z_A = torch.cat([z1, z2], dim=-1)  # (N, d_z)
-
-        mu_A = z_A.mean(dim=0)  # (d_z,)
-        centered = z_A - mu_A
-        sigma_A = (centered.T @ centered) / (n_source_samples - 1)  # (d_z, d_z)
-        d_z = mu_A.shape[0]
-        eye = torch.eye(d_z, device=device)
-        # Ledoit-Wolf-style shrinkage toward an isotropic target bounds cond(Sigma_A):
-        # without it lambda_min sits at cov_floor (~1e-4) while lambda_max ~ O(1),
-        # so cond ~ 1e4-1e5 and the Mahalanobis distance is dominated by near-null
-        # directions that do NOT reflect the actual input shift. The shrunk metric is
-        # closer to isotropic, so d_M^2 tracks the real OOD displacement.
-        mean_var = torch.diagonal(sigma_A).mean()
-        sigma_A = (1.0 - shrinkage) * sigma_A + shrinkage * mean_var * eye
-        sigma_A = sigma_A + cov_floor * eye
-        # Symmetric-eigendecomposition inverse (more stable than torch.linalg.inv on
-        # an ill-conditioned matrix).
-        evals, evecs = torch.linalg.eigh(sigma_A)
-        evals = evals.clamp_min(cov_floor)
-        sigma_A_inv = (evecs / evals) @ evecs.T
-
-        # Diagnostic: report Sigma_A eigenvalue spectrum once at init.
-        eigvals = torch.linalg.eigvalsh(sigma_A)
-        print(f"[SDSigmaZ] Sigma_A eigenvalues: "
-              f"min={eigvals.min().item():.3e}  "
-              f"max={eigvals.max().item():.3e}  "
-              f"cond={(eigvals.max() / eigvals.min()).item():.3e}")
-        print(f"[SDSigmaZ] z_A   per-coord var range: "
-              f"min={z_A.var(dim=0).min().item():.3e}  "
-              f"max={z_A.var(dim=0).max().item():.3e}")
-
+        print("[SDSigmaZ] fitting source Gaussian...")
+        z_A, _, _, _, _ = _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device)
+        mu_A, sigma_A, sigma_A_inv = _fit_sigma_A(z_A, cov_floor, shrinkage, device)
         self.register_buffer("mu_A", mu_A)
         self.register_buffer("sigma_A", sigma_A)
         self.register_buffer("sigma_A_inv", sigma_A_inv)
+        self.d_z = mu_A.shape[0]
+
+    def amplitude(self, z):
+        delta = z - self.mu_A
+        return ((delta @ self.sigma_A_inv) * delta).sum(-1).clamp_min(0.0) / self.d_z
+
+    def forward(self, z, x1=None, x2=None):
+        amp = self.amplitude(z)
+        return amp.view(-1, 1, 1) * self.sigma_A.unsqueeze(0)
+
+
+class CycleSigmaZ(nn.Module):
+    """Cycle-consistency shift score: s = ||x - g(f(x))||.
+
+    Trains a small decoder g: Z -> X on source pairs.  At inference the
+    reconstruction error in input space measures shift even when the encoder
+    folds OOD inputs back into the source latent cloud.
+    See formalism/05_untying_latent_collapse.md.
+    """
+
+    def __init__(self, encoder1, encoder2, x_range=(-1., 1.),
+                 n_source_samples=5000, device="cuda",
+                 cov_floor=1e-4, shrinkage=0.1,
+                 n_train_steps=3000, lr=1e-3,
+                 phi_mode="sigma_a"):
+        """
+        phi_mode: shape of Sigma_z
+            "sigma_a"  – amplitude * Sigma_A  (default)
+            "identity" – amplitude * I
+        """
+        super().__init__()
+        self.phi_mode = phi_mode
+        print(f"[CycleSigmaZ] fitting source data + training decoders "
+              f"({n_train_steps} steps)...")
+        z_A, x1_A, x2_A, z1_A, z2_A = _sample_source_latents(
+            encoder1, encoder2, x_range, n_source_samples, device)
+        d_half = z1_A.shape[1]
+
+        # Two lightweight decoders: one per modality (R^16 -> R^1 for the toy)
+        def _make_dec(in_dim):
+            return nn.Sequential(
+                nn.Linear(in_dim, 32), nn.SiLU(),
+                nn.Linear(32, 16), nn.SiLU(),
+                nn.Linear(16, 1)
+            ).to(device)
+
+        # Seed decoder init for reproducible cycle baselines across runs.
+        torch.manual_seed(0)
+        dec1 = _make_dec(d_half)
+        dec2 = _make_dec(d_half)
+
+        opt = torch.optim.Adam(list(dec1.parameters()) + list(dec2.parameters()), lr=lr)
+        z1_A = z1_A.detach(); z2_A = z2_A.detach()
+        x1_A = x1_A.detach(); x2_A = x2_A.detach()
+
+        dec1.train(); dec2.train()
+        for step in range(n_train_steps):
+            idx = torch.randint(n_source_samples, (256,), device=device)
+            loss = (F.mse_loss(dec1(z1_A[idx]), x1_A[idx]) +
+                    F.mse_loss(dec2(z2_A[idx]), x2_A[idx]))
+            opt.zero_grad(); loss.backward(); opt.step()
+            if (step + 1) % 1000 == 0:
+                print(f"  step {step+1}/{n_train_steps}  recon_loss={loss.item():.5f}")
+
+        dec1.eval(); dec2.eval()
+        self.dec1 = dec1
+        self.dec2 = dec2
+        self.d_half = d_half
+        self.d_z = z_A.shape[1]
+
+        if phi_mode == "sigma_a":
+            mu_A, sigma_A, _ = _fit_sigma_A(z_A, cov_floor, shrinkage, device)
+            self.register_buffer("mu_A", mu_A)
+            self.register_buffer("sigma_A", sigma_A)
+        else:
+            self.register_buffer("sigma_A", torch.eye(self.d_z, device=device))
+
+        # source-amplitude baseline: mean cycle error on source (for normalisation)
+        with torch.no_grad():
+            e1 = (dec1(z1_A) - x1_A).pow(2).mean(-1)
+            e2 = (dec2(z2_A) - x2_A).pow(2).mean(-1)
+            baseline = (e1 + e2).mean().clamp_min(1e-6)
+        self.register_buffer("cycle_baseline", baseline)
+        print(f"[CycleSigmaZ] source cycle baseline = {baseline.item():.5f}")
+
+    @torch.no_grad()
+    def amplitude(self, z, x1, x2):
+        """s_cyc(x) = (||x1 - g1(z1)||^2 + ||x2 - g2(z2)||^2) / baseline."""
+        z1 = z[:, :self.d_half]
+        z2 = z[:, self.d_half:]
+        e1 = (self.dec1(z1) - x1).pow(2).mean(-1)
+        e2 = (self.dec2(z2) - x2).pow(2).mean(-1)
+        return ((e1 + e2) / self.cycle_baseline).clamp_min(0.0)
+
+    def forward(self, z, x1=None, x2=None):
+        assert x1 is not None and x2 is not None, \
+            "CycleSigmaZ requires x1, x2 (raw inputs) in forward()"
+        amp = self.amplitude(z, x1, x2)
+        return amp.view(-1, 1, 1) * self.sigma_A.unsqueeze(0)
+
+
+class GMMSigmaZ(nn.Module):
+    """Multi-cluster Mahalanobis: fits K Gaussians on source latents.
+
+    s_GMM(z) = soft-weighted average Mahalanobis to K cluster centers.
+    Phi = soft-weighted average of cluster covariances.
+    See formalism/04_sigma_z_extensions.md §Extension 2.
+    """
+
+    def __init__(self, encoder1, encoder2, x_range=(-1., 1.),
+                 n_source_samples=5000, device="cuda",
+                 cov_floor=1e-4, shrinkage=0.1,
+                 n_clusters=4, n_kmeans_iters=100):
+        super().__init__()
+        print(f"[GMMSigmaZ] fitting {n_clusters} clusters on source latents...")
+        z_A, _, _, _, _ = _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device)
+        d_z = z_A.shape[1]
+
+        # K-means initialisation via random subset
+        # randperm generator must be CPU even when tensors live on CUDA
+        gen = torch.Generator(device="cpu").manual_seed(42)
+        idx = torch.randperm(n_source_samples, generator=gen)[:n_clusters]
+        centers = z_A[idx].clone()
+
+        for _ in range(n_kmeans_iters):
+            dists = torch.cdist(z_A, centers)          # (N, K)
+            assign = dists.argmin(dim=1)               # (N,)
+            new_centers = torch.stack([
+                z_A[assign == k].mean(0) if (assign == k).any() else centers[k]
+                for k in range(n_clusters)
+            ])
+            if (new_centers - centers).norm() < 1e-6:
+                break
+            centers = new_centers
+
+        # Per-cluster covariance
+        mu_list, sigma_list, sigma_inv_list, pi_list = [], [], [], []
+        for k in range(n_clusters):
+            mask = assign == k
+            z_k = z_A[mask]
+            n_k = z_k.shape[0]
+            if n_k < 2:
+                z_k = z_A  # fallback: use all
+                n_k = z_A.shape[0]
+            mu_k = z_k.mean(0)
+            c = z_k - mu_k
+            sigma_k = (c.T @ c) / (n_k - 1)
+            mu_k2, sigma_k2, sigma_k2_inv = _fit_sigma_A(
+                z_k, cov_floor, shrinkage, device)
+            mu_list.append(mu_k2)
+            sigma_list.append(sigma_k2)
+            sigma_inv_list.append(sigma_k2_inv)
+            pi_list.append(torch.tensor(n_k / n_source_samples, device=device))
+
+        self.register_buffer("mu_k",       torch.stack(mu_list))          # (K, d)
+        self.register_buffer("sigma_k",    torch.stack(sigma_list))       # (K, d, d)
+        self.register_buffer("sigma_k_inv",torch.stack(sigma_inv_list))   # (K, d, d)
+        self.register_buffer("pi_k",       torch.stack(pi_list))          # (K,)
         self.d_z = d_z
+        self.K = n_clusters
 
-    def mahalanobis_sq(self, z: torch.Tensor) -> torch.Tensor:
-        """d_M^2(z; mu_A, Sigma_A). Returns (B,) non-negative scalar per sample."""
-        delta = z - self.mu_A  # (B, d_z)
-        return ((delta @ self.sigma_A_inv) * delta).sum(dim=-1).clamp_min(0.0)
+    def forward(self, z, x1=None, x2=None):
+        B = z.shape[0]
+        # Mahalanobis distance to each cluster: (B, K)
+        delta = z.unsqueeze(1) - self.mu_k.unsqueeze(0)         # (B, K, d)
+        d2 = torch.einsum("bki,kij,bkj->bk", delta, self.sigma_k_inv, delta)
+        d2 = d2.clamp_min(0.0)
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        """Per-sample full Sigma_z. z: (B, d_z) -> (B, d_z, d_z)."""
-        amp = self.mahalanobis_sq(z) / self.d_z  # (B,)
-        return amp.view(-1, 1, 1) * self.sigma_A.unsqueeze(0)  # (B, d_z, d_z)
+        # Soft assignment: posterior p(k|z)
+        log_p = -0.5 * d2 + self.pi_k.log().unsqueeze(0)
+        weights = torch.softmax(log_p, dim=1)                   # (B, K)
+
+        # Weighted average amplitude and covariance
+        amp = (weights * d2 / self.d_z).sum(-1)                 # (B,)
+        sigma_z = torch.einsum("bk,kij->bij", weights, self.sigma_k)  # (B, d, d)
+        sigma_z = amp.view(-1, 1, 1) * sigma_z
+        return sigma_z
+
+
+class PCASigmaZ(nn.Module):
+    """Off-manifold PCA projection distance.
+
+    s_PCA(z) = ||(z - mu_A) - U_k U_k^T (z - mu_A)||^2 / (d_z - k)
+    i.e. squared residual in the directions NOT spanned by top-k PCs.
+    See formalism/04_sigma_z_extensions.md §Extension 3A.
+    """
+
+    def __init__(self, encoder1, encoder2, x_range=(-1., 1.),
+                 n_source_samples=5000, device="cuda",
+                 cov_floor=1e-4, shrinkage=0.1,
+                 n_components=2):
+        super().__init__()
+        print(f"[PCASigmaZ] fitting PCA ({n_components} components) on source latents...")
+        z_A, _, _, _, _ = _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device)
+        mu_A, sigma_A, _ = _fit_sigma_A(z_A, cov_floor, shrinkage, device)
+        d_z = mu_A.shape[0]
+
+        # SVD of centred source latents to get principal directions
+        evals, evecs = torch.linalg.eigh(sigma_A)   # ascending order
+        U_k = evecs[:, -n_components:]               # (d_z, k) top-k eigenvectors
+
+        # For reference: fraction of variance captured
+        var_frac = evals[-n_components:].sum() / evals.sum()
+        print(f"  top-{n_components} PCs capture {var_frac*100:.1f}% of source variance")
+
+        self.register_buffer("mu_A",    mu_A)
+        self.register_buffer("sigma_A", sigma_A)
+        self.register_buffer("U_k",     U_k)
+        self.d_z = d_z
+        self.k = n_components
+        self.off_dim = d_z - n_components
+
+    def forward(self, z, x1=None, x2=None):
+        delta = z - self.mu_A                                       # (B, d_z)
+        on_manifold = delta @ self.U_k @ self.U_k.T                 # (B, d_z)
+        off_manifold = delta - on_manifold                          # (B, d_z)
+        amp = off_manifold.pow(2).sum(-1) / max(self.off_dim, 1)    # (B,)
+        amp = amp.clamp_min(0.0)
+        return amp.view(-1, 1, 1) * self.sigma_A.unsqueeze(0)
 
 
 class GroundTruthSigmaZ:

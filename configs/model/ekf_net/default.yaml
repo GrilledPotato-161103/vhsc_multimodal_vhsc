@@ -16,9 +16,30 @@ residual: true
 # "closed_form" — alpha = sqrt(2 sigma_pred_sq), beta = 2 (formalism/02 §3).
 #                  Diagnostic only: isolates the EKF chain (no learnable uncertainty params,
 #                  variance is uninformative here because the latent shift is small).
-mode: "learned"
+# closed_form ties var = sigma_total directly (no inv_alpha_net indirection).
+# Confirmed by cf1: jumped PCC(predvar,err) from ~0 to 0.87. This is the winner.
+mode: "closed_form"
 
 # Bounds for the learned beta head -> beta in [beta_min, beta_max]. Keeps
 # Gamma(3/beta)/Gamma(1/beta) finite (a collapsing beta caused the variance blow-up).
 beta_min: 0.5
 beta_max: 4.0
+
+# Propagation mode for sigma_pred_sq inside EKFBiModalInferer.forward.
+# "first_order"  — J_g^T Sigma_recon J_g  (fast, suffers Jacobian collapse OOD)
+# "second_order" — adds (1/2)tr((H_g Sigma_recon)^2) (d backward passes per batch,
+#                  fixes Jacobian collapse; ~3-5x slower but calibrated OOD variance)
+prop_mode: "second_order"
+
+# ---------------------------------------------------------------------------
+# Aleatoric uncertainty head: learns in-distribution function complexity.
+# Combined with epistemic: sigma_total = sigma_ep + lambda_aleatoric * sigma_al
+# ---------------------------------------------------------------------------
+use_aleatoric: true           # validated: aleatoric head tracks error at PCC 0.93
+aleatoric_hidden_dim: 32
+aleatoric_n_layers: 2
+aleatoric_activation: "silu"
+aleatoric_norm: "layer"
+aleatoric_input_mode: "xy"         # "xy" | "z_only" | "z_and_sep"
+aleatoric_xy_dim: 2               # dim of raw inputs (2 for toy: x1, x2)
+lambda_aleatoric: 1.0

@@ -29,9 +29,12 @@ breakpoints:
 # Sigma_z(z) = (d_M^2(z; mu_A, Sigma_A) / d_z) * Sigma_A
 # Fitted once at module init on n_source_samples drawn from x_range.
 sigma_z:
-  type: "sd"
-  n_source_samples: 5000              # ablation knob: shrink toward 0 -> SF/B-only regime
-  source_x_range: [-1.0, 1.0]         # range used to draw source samples
+  # sd | cycle | cycle_iso | gmm | pca
+  # cycle_iso = Cycle+Identity: B-only SOTA (no source data needed)
+  # cycle     = Cycle+SigmaA:  SD SOTA    (uses source_x_range samples)
+  type: "cycle_iso"
+  n_source_samples: 5000
+  source_x_range: [-1.0, 1.0]
   cov_floor: 1.0e-4
 
 ekf:

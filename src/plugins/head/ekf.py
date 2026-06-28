@@ -16,7 +16,75 @@ import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 from src.models.components.toy import MLP, Residual, get_normalization
 from src.plugins.var import BreakpointContext, BreakpointOutput
-from src.plugins.ekf_propagation import * 
+from src.plugins.ekf_propagation import *
+
+
+class AleatoricHead(nn.Module):
+    """Learned aleatoric uncertainty head.
+
+    Maps concat(z, log_sigma_ep) -> sigma_al (strictly positive).
+    Captures in-distribution function complexity that the EKF epistemic
+    term misses. Combined with sigma_ep via:
+        sigma_total = sigma_ep + lambda_aleatoric * sigma_al
+
+    input_mode:
+      "z_and_sep" (default): concat(z, log_sigma_ep) — OOD-aware aleatoric
+      "z_only":               z only — pure function complexity, ignores shift
+
+    See formalism/06_empirical_validation.md §6 and the implementation plan.
+    """
+
+    def __init__(self,
+                 z_dim: int = 32,
+                 hidden_dim: int = 32,
+                 n_layers: int = 2,
+                 activation: str = "silu",
+                 norm: str = "layer",
+                 eps: float = 1e-6,
+                 input_mode: str = "z_and_sep",
+                 xy_dim: int = 2):
+        super().__init__()
+        self.eps = eps
+        self.input_mode = input_mode
+        act = {"relu": nn.ReLU, "silu": nn.SiLU, "gelu": nn.GELU}[activation]
+        if input_mode == "xy":
+            in_dim = xy_dim          # raw input coords bypass z entirely
+        elif input_mode == "z_only":
+            in_dim = z_dim
+        else:
+            in_dim = z_dim + 1       # z + log_sigma_ep
+        layers: list[nn.Module] = [nn.Linear(in_dim, hidden_dim, bias=True), act()]
+        for _ in range(n_layers - 1):
+            layers += [nn.Linear(hidden_dim, hidden_dim),
+                       get_normalization(norm, hidden_dim),
+                       act()]
+        out_layer = nn.Linear(hidden_dim, 1)
+        # Init bias so Softplus(bias) ≈ 0 at start — prevents early domination.
+        nn.init.constant_(out_layer.bias, -3.0)
+        nn.init.xavier_uniform_(out_layer.weight)
+        layers.append(out_layer)
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, z: torch.Tensor, sigma_ep: torch.Tensor,
+                xy: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Args:
+            z:        (B, z_dim) latent features
+            sigma_ep: (B, 1) epistemic variance from EKF
+            xy:       (B, xy_dim) raw input coords — required when input_mode='xy'
+        Returns:
+            sigma_al: (B, 1) strictly positive aleatoric variance
+        """
+        if self.input_mode == "xy":
+            assert xy is not None, "xy required when input_mode='xy'"
+            feat = xy.detach()
+        elif self.input_mode == "z_only":
+            feat = z.detach()
+        else:
+            log_sep = torch.log(sigma_ep.detach().clamp_min(self.eps))
+            feat = torch.cat([z.detach(), log_sep], dim=-1)
+        return F.softplus(self.net(feat)) + self.eps                 # (B, 1)
+
 
 class EKFBiModalInferer(nn.Module):
     def __init__(self,
@@ -34,8 +102,17 @@ class EKFBiModalInferer(nn.Module):
                     eps: float = 1e-6,
                     residual = False,
                     mode: str = "learned",
+                    prop_mode: str = "first_order",
                     beta_min: float = 0.5,
                     beta_max: float = 4.0,
+                    use_aleatoric: bool = False,
+                    aleatoric_hidden_dim: int = 32,
+                    aleatoric_n_layers: int = 2,
+                    aleatoric_activation: str = "silu",
+                    aleatoric_norm: str = "layer",
+                    aleatoric_input_mode: str = "z_only",
+                    aleatoric_xy_dim: int = 2,
+                    lambda_aleatoric: float = 1.0,
                     ):
         # We gonna take
         super().__init__()
@@ -51,8 +128,26 @@ class EKFBiModalInferer(nn.Module):
         self.eps = eps
         if mode not in ("learned", "closed_form"):
             raise ValueError(f"mode must be 'learned' or 'closed_form', got {mode!r}")
+        if prop_mode not in ("first_order", "second_order"):
+            raise ValueError(f"prop_mode must be 'first_order' or 'second_order', got {prop_mode!r}")
         self.mode = mode
+        self.prop_mode = prop_mode
+        self.lambda_aleatoric = lambda_aleatoric
         bottleneck_dim = bottleneck_dim or hidden_dims[-1]
+
+        if use_aleatoric:
+            self.aleatoric_net = AleatoricHead(
+                z_dim=latent_size,
+                hidden_dim=aleatoric_hidden_dim,
+                n_layers=aleatoric_n_layers,
+                activation=aleatoric_activation,
+                norm=aleatoric_norm,
+                input_mode=aleatoric_input_mode,
+                xy_dim=aleatoric_xy_dim,
+                eps=eps,
+            )
+        else:
+            self.aleatoric_net = None
 
         if activation == "relu":
             act = nn.ReLU
@@ -113,39 +208,54 @@ class EKFBiModalInferer(nn.Module):
             return self.reconstructor.forward_raw(z, signal=signal)
         return infer
     
-    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, signal: tuple = (1, 1)):
+    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, signal: tuple = (1, 1),
+                xy: torch.Tensor | None = None):
         """
         Args:
             z:       (B, d_z) latent batch
-            sigma_z: (B, d_z, d_z) per-sample input covariance from the Sigma_z provider
+            sigma_z: (B, d_z, d_z) per-sample input covariance
             signal:  (p1, p2) modality-presence tuple
+            xy:      (B, n_modals) raw input coordinates — required when
+                     aleatoric_input_mode='xy'
         """
         assert self.predictor is not None, "Prediction head is None"
         recon_fn = self.get_recon_fn(signal=signal)
         pred_fn = self.predictor.forward
-        sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation_full(z,
-                                                                              sigma_z=sigma_z,
-                                                                              reconstructor_fn=recon_fn,
-                                                                              predictor_fn=pred_fn)
+        if self.prop_mode == "second_order":
+            sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation_second_order(
+                z, sigma_z=sigma_z, reconstructor_fn=recon_fn, predictor_fn=pred_fn)
+        else:
+            sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation_full(
+                z, sigma_z=sigma_z, reconstructor_fn=recon_fn, predictor_fn=pred_fn)
         if len(sigma_pred_sq.shape) < 2:
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
 
-        if self.mode == "closed_form":
-            # Linear-Gaussian closed form (formalism/02 §3): beta=2, alpha=sqrt(2 sigma_pred_sq).
-            # No learnable parameters in the heads — pure EKF-driven uncertainty.
-            inv_alpha = 1.0 / torch.sqrt(2.0 * sigma_pred_sq + self.eps)
-            beta = torch.full_like(sigma_pred_sq, 2.0)
-            return inv_alpha, beta, sigma_pred_sq
+        # Epistemic variance from EKF propagation.
+        sigma_ep = sigma_pred_sq   # (B, 1)
 
-        # mode == "learned" — bounded heads (see __init__ notes).
+        # Aleatoric variance: learned MLP on z + log(sigma_ep).
+        # Zero if use_aleatoric=False (aleatoric_net is None).
+        if self.aleatoric_net is not None:
+            sigma_al = self.aleatoric_net(z, sigma_ep, xy=xy)    # (B, 1)
+            sigma_total = sigma_ep + self.lambda_aleatoric * sigma_al
+        else:
+            sigma_al = torch.zeros_like(sigma_ep)
+            sigma_total = sigma_ep
+
+        if self.mode == "closed_form":
+            inv_alpha = 1.0 / torch.sqrt(2.0 * sigma_total + self.eps)
+            beta = torch.full_like(sigma_total, 2.0)
+            return inv_alpha, beta, sigma_ep, sigma_al
+
+        # mode == "learned" — bounded heads.
         S_f = torch.linalg.svdvals(J_f.permute(0, 2, 1))
         beta_raw = self.beta_net(S_f / torch.amax(S_f, dim=-1, keepdim=True))
         beta = self.beta_min + (self.beta_max - self.beta_min) * torch.sigmoid(beta_raw)
-        # Feed the EKF variance in log-space so the head sees a well-scaled signal
-        # regardless of whether sigma_pred_sq is 1e-4 or 1e4.
-        ekf_feat = torch.log(torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1).clamp_min(self.eps))
+        # inv_alpha_net sees sigma_total (not just sigma_ep) so it adapts to the
+        # combined epistemic + aleatoric variance.
+        ekf_feat = torch.log(torch.cat([sigma_total, diag_sigma_recon], dim=-1).clamp_min(self.eps))
         inv_alpha = F.softplus(self.inv_alpha_net(ekf_feat)) + self.eps
-        return inv_alpha, beta, sigma_pred_sq
+        return inv_alpha, beta, sigma_ep, sigma_al
         
 class EKFGGDNLLLoss(nn.Module):
     """Generalized Gaussian NLL where alpha = sqrt(sigma_pred_sq) from EKF chain.
