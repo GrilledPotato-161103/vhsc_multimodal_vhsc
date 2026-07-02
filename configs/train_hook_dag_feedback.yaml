@@ -1,0 +1,49 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: hook_manifold
+  - model: hook_dag
+  - plugins: hook_dag_feedback
+  - callbacks: hook_manifold
+  - logger: wandb
+  - trainer: default
+  - paths: default
+  - extras: default
+  - hydra: default
+  - experiment: null
+  - hparams_search: null
+  - optional local: default
+  - debug: null
+
+data:
+  n_samples: 1280
+  batch_size: 16
+  num_workers: 12
+
+model:
+  epoch_phase: 1
+
+logger:
+  wandb:
+    project: "VHSC_Feedback"
+    name: feedback_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    offline: true
+
+task_name: "train_feedback"
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+
+  early_stopping:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+
+tags: ["feedback", "two_phase", "gradient_flow", "inplace_replacement"]
+
+train: True
+test: True
+ckpt_path: null
+seed: null

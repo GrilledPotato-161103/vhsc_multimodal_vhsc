@@ -1,0 +1,63 @@
+# @package _global_
+#
+# JEPA Brain Age — two-phase training with AttentiveRegressor.
+#
+# Phase 1 (0 .. unfreeze_at_epoch-1): frozen backbone, train regressor only (lr=1e-4)
+# Phase 2 (unfreeze_at_epoch ..): unfrozen backbone (lr=1e-5) + regressor (lr=5e-5)
+#
+# The backbone is loaded via the official Neuro-JEPA API
+# (neurojepa.utils.init_utils.load_backbone_from_hf), which reads config.json
+# from the HF repo to auto-detect architecture and MoE settings.
+#
+# MNI152 specifications below are verified against configs/data/template/mni152.yaml.
+# Input:  (B, 1, D, H, W)  5D volumetric — single MRI contrast, 3 spatial dims.
+#         OpenBHB quasiraw is already MNI152 T1 1mm, skull-stripped.
+#         MONAI transforms trilinear-resize to roi_size before ViT embedding.
+
+_target_: src.models.modules.jepa_brain_age.JEPABrainAgeModule
+
+checkpoint: NYUMedML/Neuro-JEPA
+freeze_backbone_initially: true
+unfreeze_at_epoch: 10
+
+# MNI152 T1 template spec (verified: configs/data/template/mni152.yaml)
+image_size: [182, 218, 182]       # MNI152 T1 1mm full FOV
+roi_size: [96, 108, 96]           # ViT input after crop
+patch_size: [12, 12, 12]          # = 8 x 9 x 8 = 576 tokens per volume
+in_chans: 1                       # single MRI contrast
+
+# Attentive regressor (cross-attention pooling, official Neuro-JEPA downstream head)
+# num_classes=1 + MSELoss = regression — despite the "Classifier" class name,
+# this is the official convention (see scripts/finetune/default.py:162).
+regressor:
+  _target_: src.models.modules.jepa_brain_age.build_attentive_regressor
+  embed_dim: 768
+  num_heads: 16
+  depth: 1
+  mlp_ratio: 4.0
+  dropout: 0.1
+
+# Distinct optimizers for different gradient strength
+backbone_optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-5
+  weight_decay: 0.01
+
+regressor_optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.01
+
+backbone_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 50
+  eta_min: 1e-6
+
+regressor_scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 50
+  eta_min: 1e-5

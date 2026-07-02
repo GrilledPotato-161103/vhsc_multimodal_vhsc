@@ -1,0 +1,58 @@
+# @package _global_
+# MGMT methylation classification — two-phase training with MultiModalJEPARegressor.
+#
+# Phase 1 (epochs 0..unfreeze_at_epoch-1): frozen ViT, train classifier only.
+# Phase 2 (epochs unfreeze_at_epoch..max_epochs): unfrozen ViT + classifier.
+#
+# Usage:
+#   python src/train_mgmt.py
+#   python -m src.models.modules.mgmt_classification
+
+defaults:
+  - _self_
+  - data: brats_radiogenomic
+  - model: mgmt_classification
+  - paths: default
+  - hydra: default
+  - logger: wandb
+  - trainer: default
+  - callbacks: default
+  - extras: default
+  - experiment: null
+  - debug: null
+  - optional local: default
+
+task_name: "train_mgmt"
+
+trainer:
+  max_epochs: 50
+  accelerator: auto
+  devices: 1
+  precision: bf16-mixed
+  accumulate_grad_batches: 4
+  gradient_clip_val: 1.0
+  log_every_n_steps: 1
+
+logger:
+  wandb:
+    project: "VHSC_MGMT"
+    name: mgmt_classification_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    offline: false
+
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: "val/auroc"
+    mode: "max"
+    save_last: true
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "val/auroc"
+    mode: "max"
+    patience: 20
+
+train: true
+test: true
+ckpt_path: null
+seed: 42
+tags: ["mgmt", "jepa", "multimodal", "classification", "two-phase"]

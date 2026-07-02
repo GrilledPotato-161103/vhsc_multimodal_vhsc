@@ -1,0 +1,33 @@
+# @package model
+# MGMT methylation classification — two-phase training with MultiModalJEPARegressor.
+#
+# Phase 1 (epochs 0..unfreeze_at_epoch-1): frozen ViT, train classifier only.
+# Phase 2 (epochs unfreeze_at_epoch..max_epochs): unfrozen ViT + classifier.
+#
+# Usage:
+#   python src/train_mgmt.py model=mgmt_classification data=brats_radiogenomic
+
+_target_: src.models.modules.mgmt_classification.MGMTClassificationModule
+
+net:
+  _target_: src.models.components.jepa.build_jepa_regressor
+  modality_keys: [t1, t2, flair]
+  image_size: [96, 108, 96]
+  num_classes: 2
+  fusion_dim: 256
+  freeze_backbone: true
+
+unfreeze_at_epoch: 10
+freeze_backbone_initially: true
+
+backbone_optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-5
+  weight_decay: 0.01
+
+classifier_optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.01

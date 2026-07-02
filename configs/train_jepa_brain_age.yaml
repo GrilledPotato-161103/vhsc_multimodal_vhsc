@@ -1,0 +1,59 @@
+# @package _global_
+#
+# JEPA Brain Age — two-phase training (AttentiveRegressor + ViT finetune).
+# Optimised for 8 GB VRAM (RTX 4060).
+#
+# Usage:
+#   python scripts/train_jepa_brain_age.py
+
+defaults:
+  - _self_
+  - data: openbhb_brain_age
+  - model: jepa_brain_age
+  - paths: default
+  - hydra: default
+  - logger: wandb
+  - trainer: default
+  - callbacks: default
+  - extras: default
+  - experiment: null
+  - debug: null
+  - optional local: default
+
+task_name: "train_jepa_brain_age"
+
+# ── Trainer (8 GB VRAM) ──
+trainer:
+  max_epochs: 50
+  accelerator: gpu
+  devices: 1
+  precision: bf16-mixed
+  accumulate_grad_batches: 4      # effective batch = 1 * 4 = 4
+  gradient_clip_val: 1.0
+  log_every_n_steps: 1
+
+# ── Logger ──
+logger:
+  wandb:
+    project: "VHSC_BrainAge"
+    name: jepa_brain_age_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    offline: false
+
+# ── Callbacks ──
+callbacks:
+  model_checkpoint:
+    _target_: lightning.pytorch.callbacks.ModelCheckpoint
+    monitor: "val/mae"
+    mode: "min"
+    save_last: true
+  early_stopping:
+    _target_: lightning.pytorch.callbacks.EarlyStopping
+    monitor: "val/mae"
+    mode: "min"
+    patience: 20
+
+train: true
+test: true
+ckpt_path: null
+seed: 42
+tags: ["brain-age", "jepa", "openbhb", "attentive-regressor", "two-phase"]

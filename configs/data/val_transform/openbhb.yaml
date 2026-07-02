@@ -1,0 +1,32 @@
+# @package val
+#
+# Validation / inference transform pipeline: resize quasiraw .npy → JEPA ViT tensor.
+#
+# The OpenBHBDataset.__getitem__ already handles:
+#   NaN removal, 0.5–99.5 percentile clip, min-max → [0, 1].
+# These transforms add: channel-dim fixup, MetaTensor wrapping, resize, tensor cast.
+
+_target_: monai.transforms.Compose
+transforms:
+  - _target_: monai.transforms.Lambdad
+    keys: ["image"]
+    func:
+      _target_: src.data.openbhb.transforms.to_monai_compatible
+      _partial_: true
+
+  - _target_: monai.transforms.EnsureTyped
+    keys: ["image"]
+    data_type: "tensor"
+    track_meta: true
+
+  - _target_: monai.transforms.Resized
+    keys: ["image"]
+    spatial_size: [96, 108, 96]
+    mode: "trilinear"
+    align_corners: true
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.ToTensord
+    keys: ["image"]
+    dtype: "float32"
+    allow_missing_keys: true

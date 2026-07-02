@@ -1,0 +1,91 @@
+# Hook DAG plugin config — MultiModalJEPARegressor with breakpoints on ALL
+# encoder layers (encoders.0, encoders.1) and final output layer (classifier).
+#
+# Architecture for brain age estimation:
+#   T1w MRI ─► [ViT backbone] ─► encoders.0 (ModalExtractor) ─► ┐
+#   T2w MRI ─► [ViT backbone] ─► encoders.1 (ModalExtractor) ─► ┤
+#                                                               ├─► classifier (CrossAttn) ─► brain_age
+#                                                               │
+#   Breakpoints:
+#     src_enc0  (after encoders.0)  — capture T1w ViT token features [B, N, 768]
+#     src_enc1  (after encoders.1)  — capture T2w ViT token features [B, N, 768]
+#     recon     (before classifier) — reconstruct missing modality from pooled latents
+#     unc       (after classifier)  — BayesCap uncertainty on brain age prediction
+#
+# Usage:
+#   python src/train_hook_dag_jepa_brain_age.py
+
+target: MultiModalJEPARegressor
+model_checkpoint: data/checkpoints/jepa/jepa_pretrained.pth
+plugins_checkpoint: null
+
+breakpoints:
+
+  # --- Source breakpoints: capture per-modality ViT token features ---
+
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_enc0
+    pos: after
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_enc1
+    pos: after
+
+  # --- Reconstruction breakpoint: mean-pools ViT tokens, reconstructs ---
+  #
+  # data_sources: [src_enc0.0, src_enc1.0] — per-modality token grids via DAG.
+  # pre_fn: MeanPoolCollectedFn  — collapses [B, N, 768] → [B, 768] per modality,
+  #                                 then packs into ctx.inputs tuple for BilinearReconstructor.
+  # mutate: true                 — replaces classifier input with reconstructed latent.
+
+  - layer_name: classifier
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: reconstructor
+      data_sources: [src_enc0.0, src_enc1.0]
+      pre_fn:
+        _target_: src.plugins.reconstructor.pool.MeanPoolCollectedFn
+      callback:
+        _target_: src.plugins.reconstructor.linear.BilinearReconstructor
+        d_1: 768
+        d_2: 768
+        hidden_dims: [512, 256, 128]
+        activation: silu
+        norm: layer
+        dropout: 0.3
+        order: adn
+        concat: false
+        dist:
+          _target_: torch.nn.MSELoss
+          reduction: none
+      mutate: true
+      valid: true
+    pos: before
+
+  # --- Uncertainty breakpoint: BayesCap on brain age prediction ---
+  #
+  # data_sources: [input]  — reads classifier output (brain age logit).
+  #                         For brain age regression, output is [B, 1].
+  # mutate: false          — observer only.
+
+  - layer_name: classifier
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: uncertainty
+      data_sources: [input]
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        output_dim: 1
+        hidden_dims: [32, 16, 8]
+        per_dim_uncertainty: false
+        dropout: 0.3
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after

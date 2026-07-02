@@ -1,0 +1,16 @@
+# @package _global_
+#
+# OpenBHB brain age data config — 8 GB VRAM safe.
+# num_workers=0 prevents CPU multiprocessing crashes on Windows.
+
+_target_: src.data.openbhb.datamodule.OpenBHBDataModule
+
+data_dir: data/openbhb
+batch_size: 1                         # minimum for 8 GB VRAM
+num_workers: 0                         # Windows stability
+n_train: 8                             # all downloaded samples
+n_val: 8
+seed: 42
+
+train_transform: configs/data/transform/train/openbhb.yaml
+val_transform: configs/data/transform/val/openbhb.yaml

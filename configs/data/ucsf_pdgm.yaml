@@ -1,0 +1,20 @@
+# @package _global_
+# UCSF-PDGM-v3 DataModule config (out-of-domain, test_ood only).
+#
+# Transform is composed via Hydra defaults — hydra.utils.instantiate(cfg.data)
+# recursively instantiates the transform as a monai Compose before passing it
+# to the DataModule constructor.
+#
+# Usage:
+#   python src/eval_hook_dag_mgmt_ood.py data=ucsf_pdgm
+
+_target_: src.data.ucsf_pdgm.datamodule.UCSFPDGMDataModule
+
+defaults:
+  - transform: brats_radiogenomic
+
+labels_csv: data/jepa/ucsf_pdgm/splits/labels.csv
+data_dir: data/jepa/ucsf_pdgm
+modality_keys: [t1, t2, flair]
+batch_size: 1
+num_workers: 0

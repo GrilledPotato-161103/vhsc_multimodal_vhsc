@@ -1,0 +1,120 @@
+# Round-trip hook DAG — in-place effect via feedback through shared state.
+#
+# Architecture:
+#   src_enc0 ──► reconstructor (DAG edge via _buffer)
+#   src_enc1 ──► reconstructor (DAG edge via _buffer)
+#   reconstructor ──► controller.state["z0"], state["z1"]  (feedback via state)
+#   state         ──► head_mediator  (reads processed latents from state)
+#   head output   ──► uncertainty    (BayesCap on final prediction)
+#
+# The head never sees the original encoder outputs.  Instead, RoundTripCollector
+# overwrites controller.state for masked modalities with reconstructed latents,
+# and StateReadbackFn reads the (potentially overwritten) state, replacing the
+# head input.
+#
+# Breakpoint names are backward-compatible with the existing ModelInjectModule
+# (reconstructor.0 and uncertainty.0 as recon_bp / unc_bp).
+#
+# Usage:
+#   python src/train_hook_dag.py --config-name train_hook_dag_roundtrip
+
+target: MultiModalRegressor
+model_checkpoint: data/checkpoints/checkpoint_multimodal_manifold.pth
+plugins_checkpoint: null
+
+breakpoints:
+
+  # ── Source BPs: capture encoder outputs, write to shared state ──
+
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_enc0
+      callback:
+        _target_: src.plugins.reconstructor.roundtrip.StateWriterHook
+        state_key: z0
+    pos: after
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_enc1
+      callback:
+        _target_: src.plugins.reconstructor.roundtrip.StateWriterHook
+        state_key: z1
+    pos: after
+
+  # ── Terminal reconstructor: fires on LAST encoder, feeds back to state ──
+  #
+  # data_sources: [src_enc0.0, src_enc1.0] — collects both encoder outputs.
+  # pre_fn: ToListCollectedFn              — packs collected tensors into tuple.
+  # callback: RoundTripCollector           — runs BilinearReconstructor,
+  #                                          overwrites state for masked modals.
+  # valid: true                            — trace accessible for loss.
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: reconstructor
+      data_sources: [src_enc0.0, src_enc1.0]
+      pre_fn:
+        _target_: src.plugins.hook_dag.ToListCollectedFn
+      callback:
+        _target_: src.plugins.reconstructor.roundtrip.RoundTripCollector
+        reconstructor:
+          _target_: src.plugins.reconstructor.linear.BilinearReconstructor
+          d_1: 16
+          d_2: 16
+          hidden_dims: [32, 16, 16, 16]
+          activation: silu
+          norm: group
+          dropout: 0.3
+          order: adn
+          concat: false
+          dist:
+            _target_: torch.nn.MSELoss
+            reduction: none
+        state_keys: [z0, z1]
+      mutate: false
+      valid: true
+    pos: after
+
+  # ── Head mediator: reads processed state, replaces head input ──
+  #
+  # Placed before head with mutate=true.  Ignores the stale zs list from
+  # the model's forward() and reads controller.state instead (which has
+  # been overwritten by RoundTripCollector for any masked modalities).
+
+  - layer_name: head
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: head_mediator
+      callback:
+        _target_: src.plugins.reconstructor.roundtrip.StateReadbackFn
+        state_keys: [z0, z1]
+        combine: sum
+      mutate: true
+      valid: false
+    pos: before
+
+  # ── Uncertainty: BayesCap on final head output ──
+  #
+  # Same as original hook_dag.yaml — reads classifier output via data_sources: [input].
+
+  - layer_name: head
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: uncertainty
+      data_sources: [input]
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        output_dim: 1
+        hidden_dims: [8, 8, 4]
+        per_dim_uncertainty: False
+        dropout: 0.3
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after

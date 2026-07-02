@@ -64,23 +64,130 @@ class ModalExtractor(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Main wrapper
+# Modality-flexible fusion: mean aggregation after per-modality projection
 # ---------------------------------------------------------------------------
 
+class ModalityFusion(nn.Module):
+    """Fusion head that accepts an arbitrary subset of modalities.
+
+    Each present modality is projected through a shared-structure linear
+    block, then all projected features are **mean-aggregated** and passed
+    through a classifier.  Missing modalities are simply skipped.
+
+    Parameters
+    ----------
+    embed_dim : int
+        ViT token embedding dimension (768 for vit_base).
+    fusion_dim : int
+        Dimension after per-modality projection (default 256).
+    num_classes : int
+        Number of output classes.
+    modality_keys : Sequence[str]
+        Fixed modality names, e.g. ``["t1", "t2", "flair"]``.
+    dropout : float
+        Dropout after projection activation.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int = 768,
+        fusion_dim: int = 256,
+        num_classes: int = 2,
+        modality_keys: Sequence[str] = ("t1", "t2", "flair"),
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.modality_keys = list(modality_keys)
+        self.embed_dim = embed_dim
+        self.fusion_dim = fusion_dim
+
+        # Per-modality projection (same architecture, independent weights)
+        self.projections = nn.ModuleDict({
+            key: nn.Sequential(
+                nn.Linear(embed_dim, fusion_dim),
+                nn.LayerNorm(fusion_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+            for key in self.modality_keys
+        })
+
+        # Classification head
+        self.head = nn.Sequential(
+            nn.Linear(fusion_dim, fusion_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fusion_dim, num_classes),
+        )
+
+    def forward(
+        self,
+        features: Dict[str, torch.Tensor | None],
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        """Fuse an arbitrary subset of modality features.
+
+        Parameters
+        ----------
+        features : dict
+            Maps modality key → ``[B, N, embed_dim]`` token grid, or ``None``
+            if that modality is missing.  Token grids are mean-pooled to
+            ``[B, embed_dim]`` before projection.
+
+        Returns
+        -------
+        logits : [B, num_classes]
+        info : dict with keys ``"fused"``, ``"present"``, ``"projected"``
+        """
+        projected = []
+        present = []
+
+        for key in self.modality_keys:
+            f = features.get(key)
+            if f is None:
+                continue
+            # Mean-pool token grid → single vector per sample
+            if f.dim() == 3:
+                f = f.mean(dim=1)  # [B, N, D] → [B, D]
+            projected.append(self.projections[key](f))
+            present.append(key)
+
+        if not projected:
+            raise ValueError(
+                f"At least one modality must be present. "
+                f"Got all None for keys {self.modality_keys}."
+            )
+
+        # Mean aggregation across present modalities
+        fused = torch.stack(projected, dim=0).mean(dim=0)  # [B, fusion_dim]
+        logits = self.head(fused)
+
+        return logits, {
+            "fused": fused,
+            "present": present,
+            "projected": projected,
+        }
+# ---------------------------------------------------------------------------
+# Main wrapper
+# ---------------------------------------------------------------------------
 
 class MultiModalJEPARegressor(nn.Module):
     """Multi-modal JEPA regressor / classifier with hook-compatible module tree.
 
+    Supports a fixed set of modalities (default ``["t1", "t2", "flair"]``)
+    with **arbitrary subsets present at inference time**.  Missing modalities
+    are skipped; fusion is mean-aggregation of per-modality projections.
+
     Parameters
     ----------
-    backbone:
-        Pretrained Neuro-JEPA VisionTransformer (shared, frozen).
-    classifier:
-        Cross-attention ``MultiModalLateFusion`` from
-        ``neurojepa.models.cross_attn``.
-    modality_keys:
-        Ordered modality names, e.g. ``["t1w", "t2w"]``.
-    image_size:
+    backbone : VisionTransformer
+        Pretrained Neuro-JEPA ViT (shared, frozen).
+    classifier : ModalityFusion or MultiModalLateFusion
+        Fusion head.  If a legacy 2-modality ``MultiModalLateFusion`` is
+        passed, the wrapper falls back to the old ``feats[0], feats[1]``
+        forward path for backward compatibility.
+    modality_keys : Sequence[str]
+        Fixed modality names, e.g. ``["t1", "t2", "flair"]``.
+    image_size : tuple
         Spatial input size ``(D, H, W)`` expected by the backbone.
     """
 
@@ -88,7 +195,7 @@ class MultiModalJEPARegressor(nn.Module):
         self,
         backbone: nn.Module,
         classifier: nn.Module,
-        modality_keys: Sequence[str] = ("mod_0", "mod_1"),
+        modality_keys: Sequence[str] = ("t1", "t2", "flair"),
         image_size: Tuple[int, int, int] = (96, 108, 96),
     ) -> None:
         super().__init__()
@@ -98,9 +205,7 @@ class MultiModalJEPARegressor(nn.Module):
         self.n_modals = len(self.modality_keys)
         self.image_size = image_size
 
-        # Per-modality identity wrappers — hook targets for BreakpointController.
-        # Hooking "encoders.0" (after) captures modality-0 ViT token features,
-        # "encoders.1" (after) captures modality-1 ViT token features.
+        # Per-modality identity wrappers — hook targets for BreakpointController
         self.encoders = nn.ModuleList([
             ModalExtractor() for _ in range(self.n_modals)
         ])
@@ -109,8 +214,14 @@ class MultiModalJEPARegressor(nn.Module):
         self.backbone.requires_grad_(False)
         self.backbone.eval()
 
-        # Infer num_classes from classifier
-        if hasattr(self.classifier, "classifier") and isinstance(self.classifier.classifier, nn.Linear):
+        # Detect fusion type for backward-compat routing
+        self._use_legacy_fusion = not isinstance(classifier, ModalityFusion)
+
+        # Infer num_classes
+        if hasattr(self.classifier, "head") and isinstance(self.classifier.head, nn.Sequential):
+            last = self.classifier.head[-1]
+            self._num_classes = last.out_features if isinstance(last, nn.Linear) else 2
+        elif hasattr(self.classifier, "classifier") and isinstance(self.classifier.classifier, nn.Linear):
             self._num_classes = self.classifier.classifier.out_features
         else:
             self._num_classes = 2
@@ -125,32 +236,38 @@ class MultiModalJEPARegressor(nn.Module):
 
     def forward(
         self,
-        images: Dict[str, torch.Tensor] | List[torch.Tensor] | Tuple[torch.Tensor, ...],
+        images: Dict[str, torch.Tensor | None] | List[torch.Tensor] | Tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
-        """Forward pass returning classification logits.
-
-        Each modality is processed through the shared backbone independently
-        so that per-modality breakpoints on ``encoders.*`` fire separately.
+        """Forward pass.
 
         Parameters
         ----------
-        images:
-            Either a dict mapping modality key → ``[B, C, D, H, W]`` tensor,
-            or a list/tuple of tensors in ``modality_keys`` order.
+        images : dict or list/tuple
+            If dict: maps modality key → ``[B,C,D,H,W]`` tensor or ``None``.
+            ``None`` values are skipped (modality missing).
+            If list/tuple: tensors in ``modality_keys`` order (backward compat).
 
         Returns
         -------
-        logits:
-            ``[B, num_classes]``.
+        logits : ``[B, num_classes]``
         """
+        # Normalize to dict form
         if isinstance(images, dict):
-            image_list = [images[k] for k in self.modality_keys]
+            image_dict = images
         else:
             image_list = list(images)
+            image_dict = {
+                k: image_list[i] if i < len(image_list) else None
+                for i, k in enumerate(self.modality_keys)
+            }
 
-        # Extract ViT features per modality
-        feats: List[torch.Tensor] = []
-        for i, img in enumerate(image_list):
+        # Extract ViT features per modality (skip None / missing)
+        feats: Dict[str, torch.Tensor | None] = {}
+        for i, key in enumerate(self.modality_keys):
+            img = image_dict.get(key)
+            if img is None:
+                feats[key] = None
+                continue
             # Ensure 5D
             if img.dim() == 4:
                 img = img.unsqueeze(2)  # [B,C,H,W] → [B,C,1,H,W]
@@ -160,10 +277,16 @@ class MultiModalJEPARegressor(nn.Module):
                     f = f[0]  # (tokens, moe_scores) → tokens
             # Pass through modal wrapper (hook target)
             f = self.encoders[i](f)
-            feats.append(f)
+            feats[key] = f
 
-        # Fuse via cross-attention classifier
-        logits: torch.Tensor = self.classifier(feats[0], feats[1])
+        # Fuse
+        if self._use_legacy_fusion:
+            # Legacy 2-modality path
+            present = [feats[k] for k in self.modality_keys if feats[k] is not None]
+            logits: torch.Tensor = self.classifier(present[0], present[1])
+        else:
+            logits, _ = self.classifier(feats)
+
         return logits
 
 
@@ -264,10 +387,12 @@ def _load_checkpoint_file(path: str, device: str = "cpu") -> Dict[str, Any]:
 def build_jepa_regressor(
     model_name_or_path: str = "NYUMedML/Neuro-JEPA",
     device: torch.device | str = "cpu",
-    modality_keys: Sequence[str] = ("t1w", "t2w"),
+    modality_keys: Sequence[str] = ("t1", "t2", "flair"),
     image_size: Tuple[int, int, int] = (96, 108, 96),
     num_classes: int = 2,
+    fusion_dim: int = 256,
     freeze_backbone: bool = True,
+    use_legacy_fusion: bool = False,
     hf_token: str | bool | None = True,
     hf_revision: str | None = None,
     hf_cache_dir: str | None = None,
@@ -277,48 +402,42 @@ def build_jepa_regressor(
 
     Downloads the ViT backbone from HuggingFace Hub
     (default: ``NYUMedML/Neuro-JEPA``) or loads from a local path.
-    The classifier head is built from scratch.
+    The fusion head is built from scratch.
 
-    This function **does not** import ``neurojepa.utils.init_utils``
-    (which triggers ``torchmetrics → transformers`` and fails on
-    ``huggingface-hub>=1.0``).  Instead it uses ``huggingface_hub``
-    directly and replicates the key state-dict cleaning logic inline.
+    By default uses the new :class:`ModalityFusion` (mean-aggregation of
+    per-modality linear projections) which supports arbitrary modality
+    subsets.  Pass ``use_legacy_fusion=True`` for the old 2-modality
+    ``MultiModalLateFusion`` (bidirectional cross-attention + gated fusion).
 
     Parameters
     ----------
-    model_name_or_path:
+    model_name_or_path : str
         HF Hub repo ID or local checkpoint file/directory path.
-    device:
-        Target device (cpu or cuda).
-    modality_keys:
-        Ordered modality names.
-    image_size:
+    device : str or torch.device
+    modality_keys : Sequence[str]
+        Fixed modality names (default ``["t1", "t2", "flair"]``).
+    image_size : tuple
         ``(D, H, W)`` spatial input size.
-    num_classes:
-        Number of output classes.
-    freeze_backbone:
-        If True, freeze ViT backbone parameters.
-    hf_token:
-        HF token.  ``True`` = use cached login; string = explicit token;
-        ``None`` = no auth.
-    hf_revision:
-        Optional HF branch/commit.
-    hf_cache_dir:
-        Optional HF cache directory.
+    num_classes : int
+    fusion_dim : int
+        Hidden dim of per-modality projections (new fusion only).
+    freeze_backbone : bool
+    use_legacy_fusion : bool
+        If True, use the old 2-modality ``MultiModalLateFusion``.
+    hf_token / hf_revision / hf_cache_dir
+        Passed to HF Hub download.
 
     Returns
     -------
     MultiModalJEPARegressor
     """
     import neurojepa.models.vision_transformer as vit
-    from neurojepa.models.cross_attn import MultiModalLateFusion
 
     is_local = os.path.exists(model_name_or_path)
     is_hf = not is_local and "/" in model_name_or_path
 
     # --- Resolve checkpoint file ---
     if is_hf:
-        # Try model.safetensors first, then pytorch_model.bin
         for fname in ("model.safetensors", "pytorch_model.bin"):
             try:
                 ckpt_path = _download_hf_checkpoint(
@@ -338,7 +457,6 @@ def build_jepa_regressor(
             )
     elif is_local:
         ckpt_path = model_name_or_path
-        # If it's a directory, look for model.safetensors or pytorch_model.bin
         if os.path.isdir(ckpt_path):
             for fname in ("model.safetensors", "pytorch_model.bin"):
                 candidate = os.path.join(ckpt_path, fname)
@@ -384,15 +502,26 @@ def build_jepa_regressor(
     backbone.to(device)
     del checkpoint, state_dict
 
-    # --- Build classifier ---
-    classifier = MultiModalLateFusion(
-        embed_dim=embed_dim,
-        proj_dim=512,
-        num_heads=8,
-        num_tokens=32,
-        num_classes=num_classes,
-        fusion_type="gate",
-    ).to(device)
+    # --- Build classifier / fusion ---
+    if use_legacy_fusion:
+        from neurojepa.models.cross_attn import MultiModalLateFusion
+
+        classifier = MultiModalLateFusion(
+            embed_dim=embed_dim,
+            proj_dim=512,
+            num_heads=8,
+            num_tokens=32,
+            num_classes=num_classes,
+            fusion_type="gate",
+        ).to(device)
+    else:
+        classifier = ModalityFusion(
+            embed_dim=embed_dim,
+            fusion_dim=fusion_dim,
+            num_classes=num_classes,
+            modality_keys=modality_keys,
+            dropout=0.1,
+        ).to(device)
 
     if freeze_backbone:
         backbone.requires_grad_(False)
@@ -406,3 +535,40 @@ def build_jepa_regressor(
     )
     wrapper.to(device)
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Thin wrapper around the official Neuro-JEPA loading API
+# ---------------------------------------------------------------------------
+
+def load_backbone(
+    model_name_or_path: str = "NYUMedML/Neuro-JEPA",
+    device: str | torch.device = "cpu",
+    **kwargs,
+) -> nn.Module:
+    """Load a pretrained Neuro-JEPA ViT backbone using the official API.
+
+    This wraps ``neurojepa.utils.init_utils.load_backbone_from_hf``, which
+    reads ``config.json`` from the HF repo to auto-detect architecture
+    (vit_base / vit_large) and MoE settings.
+
+    Parameters
+    ----------
+    model_name_or_path : str
+        HF Hub repo ID (``"NYUMedML/Neuro-JEPA"``) or local checkpoint path.
+    device : str or torch.device
+    **kwargs
+        Forwarded to ``load_backbone_from_hf`` (revision, cache_dir, token, etc.).
+
+    Returns
+    -------
+    VisionTransformer
+        Bare ViT backbone — no ModalExtractor wrappers, no classifier.
+    """
+    from neurojepa.utils.init_utils import load_backbone_from_hf
+
+    return load_backbone_from_hf(
+        model_name_or_path=model_name_or_path,
+        device=str(device),
+        **kwargs,
+    )

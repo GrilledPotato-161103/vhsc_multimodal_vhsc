@@ -1,5 +1,6 @@
 from __future__ import annotations
 import pickle
+from contextlib import contextmanager
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ class Breakpoint(nn.Module):
         valid: bool = False,
         kwargs: dict = dict(),
         data_sources: List[str] | None = None,
+        data_sinks: List[str] | None = None,
         pre_fn: Optional[Callable[[BreakpointContext], Any]] = None,
         post_fn: Optional[Callable[[BreakpointContext], Any]] = None,
     ):
@@ -46,6 +48,10 @@ class Breakpoint(nn.Module):
         self.data_sources: List[str] = list(data_sources) if data_sources else []
         # DAG wiring: downstream breakpoints (resolved by controller.wire())
         self.data_sinks: List[Breakpoint] = []
+        # User-declared downstream sink names — resolved by wire() via
+        # the same lookup as data_sources.  Supports declarative
+        # feedback edges (e.g. reconstructor → mutator_enc0).
+        self._declared_sinks: List[str] = list(data_sinks) if data_sinks else []
         # Runtime buffer for data pushed from upstream breakpoints
         self._buffer: Dict[str, Any] = {}
         # Optional input-preparation callable.  When set, pre_fn(ctx) is
@@ -191,6 +197,22 @@ class BreakpointController:
         self.state: Dict[str, Any] = {}
         self._wired: bool = False
 
+    @contextmanager
+    def phase(self, name: str):
+        """Set inference phase for all breakpoints.
+
+        - ``"prefill"``: collect data. BPs with ``mutate=True`` pass through.
+        - ``"mutate"``: apply processed values. BPs with ``mutate=True``
+          read from their ``_buffer`` and emit processed values.
+        - ``"default"``: normal behavior (no phase awareness).
+        """
+        old = self.state.get("_phase", "default")
+        self.state["_phase"] = name
+        try:
+            yield
+        finally:
+            self.state["_phase"] = old
+
     @staticmethod
     def __init_dict__(model: nn.Module, cfg: DictConfig) -> BreakpointController:
         controller = BreakpointController()
@@ -229,6 +251,7 @@ class BreakpointController:
                 valid=spec.get("valid", False),
                 kwargs=spec.get("kwargs", {}),
                 data_sources=spec.get("data_sources", []),
+                data_sinks=spec.get("data_sinks", []),
             )
             try:
                 controller.add_breakpoint(
@@ -429,6 +452,36 @@ class BreakpointController:
                     )
                 upstream.data_sinks.append(bp)
 
+        # Resolve explicit data_sinks → populate both sides
+        for item in self.breakpoints:
+            bp: Breakpoint = item["breakpoint"]
+            for sink_name in bp._declared_sinks:
+                downstream = bp_by_name.get(sink_name)
+                if downstream is None:
+                    parts = sink_name.split(".")
+                    base = parts[0]
+                    if base in Breakpoint.list_of_breakpoints:
+                        if len(parts) == 1:
+                            downstream = Breakpoint.list_of_breakpoints[base][-1]
+                        else:
+                            try:
+                                idx = int(parts[1])
+                                downstream = Breakpoint.list_of_breakpoints[base][idx]
+                            except (IndexError, ValueError):
+                                pass
+                if downstream is None:
+                    raise ValueError(
+                        f"Breakpoint '{bp.name}' declares data_sink "
+                        f"'{sink_name}' which does not match any registered "
+                        f"breakpoint. Available: {list(bp_by_name.keys())}"
+                    )
+                if downstream not in bp.data_sinks:
+                    bp.data_sinks.append(downstream)
+                # Also register the reverse edge so downstream knows about
+                # its implicit data source (for traceability).
+                if bp.name not in downstream.data_sources:
+                    downstream.data_sources.append(bp.name)
+
         # Validate DAG (cycle detection)
         self._validate_dag()
         self._wired = True
@@ -531,6 +584,7 @@ class BreakpointController:
                     "mutate": item["breakpoint"].mutate,
                     "callback": item["breakpoint"].callback,
                     "data_sources": item["breakpoint"].data_sources,
+                    "data_sinks": item["breakpoint"]._declared_sinks,
                 }
                 for item in self.breakpoints
             ]
@@ -591,6 +645,7 @@ class BreakpointController:
                 valid=spec.get("valid", False),
                 kwargs=spec.get("kwargs", {}),
                 data_sources=spec.get("data_sources", []),
+                data_sinks=spec.get("data_sinks", []),
             )
 
             try:

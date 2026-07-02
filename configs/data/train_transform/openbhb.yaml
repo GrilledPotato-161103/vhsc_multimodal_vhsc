@@ -1,0 +1,70 @@
+# @package train
+#
+# Training transform pipeline: loading chain + JEPA-style augmentations.
+#
+# Inherits the loading transforms from val/openbhb.yaml then appends
+# augmentation transforms matching Neuro-JEPA's vit3d_transforms train mode.
+
+_target_: monai.transforms.Compose
+transforms:
+  # -- loading chain (duplicated from val for standalone use) --
+  - _target_: monai.transforms.Lambdad
+    keys: ["image"]
+    func:
+      _target_: src.data.openbhb.transforms.to_monai_compatible
+      _partial_: true
+
+  - _target_: monai.transforms.EnsureTyped
+    keys: ["image"]
+    data_type: "tensor"
+    track_meta: true
+
+  - _target_: monai.transforms.Resized
+    keys: ["image"]
+    spatial_size: [96, 108, 96]
+    mode: "trilinear"
+    align_corners: true
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.ToTensord
+    keys: ["image"]
+    dtype: "float32"
+    allow_missing_keys: true
+
+  # -- augmentations (matching JEPA vit3d_transforms) --
+  - _target_: monai.transforms.RandFlipd
+    keys: ["image"]
+    prob: 0.1
+    spatial_axis: 0
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandFlipd
+    keys: ["image"]
+    prob: 0.1
+    spatial_axis: 1
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandFlipd
+    keys: ["image"]
+    prob: 0.1
+    spatial_axis: 2
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandAdjustContrastd
+    keys: ["image"]
+    gamma: [0.6, 1.5]
+    prob: 0.5
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandGaussianNoised
+    keys: ["image"]
+    mean: 0.0
+    std: 0.1
+    prob: 0.5
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandShiftIntensityd
+    keys: ["image"]
+    offsets: 0.1
+    prob: 0.5
+    allow_missing_keys: true

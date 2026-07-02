@@ -1,0 +1,41 @@
+# @package _global_
+#
+# MNI152 standard-space template specifications.
+#
+# Extracted from the NIfTI templates downloaded from Neuro-JEPA's README:
+#   T1:  MNI152_T1_1mm_brain.nii.gz
+#        (Google Drive: https://drive.google.com/file/d/1H84c-gcge5FpNIpU7gJiFB9J8ayeF-mx)
+#   T2:  mni_icbm152_t2_tal_nlin_asym_09c.nii
+#        (Google Drive: https://drive.google.com/file/d/1PWjTucRtyEGs1X1yl6bjSMnSb7q3ya8w)
+#
+# Both templates are 1 mm isotropic, sform_code=4 (MNI152 Talairach),
+# RAS orientation.  Neuro-JEPA uses 12-DOF affine (FLIRT) registration
+# to these spaces — T1w → T1 template, T2w/FLAIR → T2 template.
+#
+# Usage in downstream configs:
+#   defaults:
+#     - /data/template@mni152: mni152
+#   Then reference e.g. ${mni152.t1.shape}, ${mni152.t1.voxel_mm}
+
+t1:
+  shape: [182, 218, 182]
+  voxel_mm: [1.0, 1.0, 1.0]
+  orientation: "RAS"
+  sform_code: 4                     # MNI152 Talairach
+  origin_mm: [90, -126, -72]        # sform translation column
+  description: "MNI152 T1 1mm brain (skull-stripped)"
+
+t2:
+  shape: [193, 229, 193]
+  voxel_mm: [1.0, 1.0, 1.0]
+  orientation: "RAS"
+  sform_code: 4                     # MNI152 Talairach
+  origin_mm: [-96, -132, -78]       # sform translation column
+  description: "MNI ICBM 152 T2 nonlinear asymmetric 09c"
+
+# Neuro-JEPA ViT input after cropping the MNI FOV
+jepa_input:
+  roi_size: [96, 108, 96]
+  patch_size: [12, 12, 12]
+  in_chans: 1
+  num_tokens: 576                   # 8 * 9 * 8

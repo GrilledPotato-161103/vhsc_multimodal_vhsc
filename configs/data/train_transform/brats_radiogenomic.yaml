@@ -1,0 +1,63 @@
+#
+# Training transform pipeline: loading chain + JEPA-style augmentations.
+# Operates on dict keys: [t1, t2, flair, label].
+# allow_missing_keys: true — modalities may be absent (missing file or imputed).
+
+_target_: monai.transforms.Compose
+transforms:
+  # -- loading chain (same as val) --
+  - _target_: monai.transforms.EnsureTyped
+    keys: [t1, t2, flair]
+    data_type: "tensor"
+    track_meta: true
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.Resized
+    keys: [t1, t2, flair]
+    spatial_size: [96, 108, 96]
+    mode: "trilinear"
+    align_corners: true
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.ToTensord
+    keys: [t1, t2, flair]
+    dtype: "float32"
+    allow_missing_keys: true
+
+  # -- augmentations (matching JEPA vit3d_transforms) --
+  - _target_: monai.transforms.RandFlipd
+    keys: [t1, t2, flair]
+    prob: 0.1
+    spatial_axis: 0
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandFlipd
+    keys: [t1, t2, flair]
+    prob: 0.1
+    spatial_axis: 1
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandFlipd
+    keys: [t1, t2, flair]
+    prob: 0.1
+    spatial_axis: 2
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandAdjustContrastd
+    keys: [t1, t2, flair]
+    gamma: [0.6, 1.5]
+    prob: 0.5
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandGaussianNoised
+    keys: [t1, t2, flair]
+    mean: 0.0
+    std: 0.1
+    prob: 0.5
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.RandShiftIntensityd
+    keys: [t1, t2, flair]
+    offsets: 0.1
+    prob: 0.5
+    allow_missing_keys: true

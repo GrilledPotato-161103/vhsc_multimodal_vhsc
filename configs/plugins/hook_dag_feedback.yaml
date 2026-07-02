@@ -1,0 +1,117 @@
+# DAG-native feedback — two-phase in-place replacement with gradient flow.
+#
+# Architecture:
+#   src_enc0 ──(data_sinks)──► reconstructor
+#   src_enc1 ──(data_sinks)──► reconstructor
+#   reconstructor ──(data_sinks)──► mutator_enc0
+#   reconstructor ──(data_sinks)──► mutator_enc1
+#   mutator_enc0 ──(mutate=true)──► model.forward() uses rec_0
+#   mutator_enc1 ──(mutate=true)──► model.forward() uses rec_1
+#
+# Prefill phase: source BPs push encoder outputs to reconstructor,
+#   reconstructor pushes rec_0/rec_1 to mutator BPs' _buffer.
+# Mutate phase: mutator BPs read _buffer, emit reconstructed values.
+#
+# Gradient: loss → head → mutator_enc0(buffer[rec_0]) → reconstructor params
+#                       → z1 (prefill) → encoders.1
+#
+# Usage:
+#   python src/train_hook_dag.py --config-name train_hook_dag_feedback
+
+target: MultiModalRegressor
+model_checkpoint: data/checkpoints/checkpoint_multimodal_manifold.pth
+plugins_checkpoint: null
+
+breakpoints:
+
+  # ── Source BPs: capture encoder outputs, push to reconstructor ──
+
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_enc0
+      data_sinks: [reconstructor.0]
+    pos: after
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_enc1
+      data_sinks: [reconstructor.0]
+    pos: after
+
+  # ── Mutator BPs: mutate=true, consume _buffer in mutate phase ──
+  # No data_sources, no data_sinks — pure consumer + emitter.
+  # callback=None for source behavior (pass-through prefill), but
+  # MutatorCallback handles the phase-aware emit logic.
+
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: mutator_enc0
+      callback:
+        _target_: src.plugins.reconstructor.feedback.MutatorCallback
+        index: 0
+      mutate: true
+    pos: after
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: mutator_enc1
+      callback:
+        _target_: src.plugins.reconstructor.feedback.MutatorCallback
+        index: 1
+      mutate: true
+    pos: after
+
+  # ── Reconstructor: reads from sources, pushes to mutators ──
+  # data_sources: [src_enc0.0, src_enc1.0] — reads encoder outputs
+  # data_sinks: [mutator_enc0.0, mutator_enc1.0] — pushes processed values
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: reconstructor
+      data_sources: [src_enc0.0, src_enc1.0]
+      data_sinks: [mutator_enc0.0, mutator_enc1.0]
+      pre_fn:
+        _target_: src.plugins.hook_dag.ToListCollectedFn
+      callback:
+        _target_: src.plugins.reconstructor.feedback.FeedbackReconstructor
+        reconstructor:
+          _target_: src.plugins.reconstructor.linear.BilinearReconstructor
+          d_1: 16
+          d_2: 16
+          hidden_dims: [32, 16, 16, 16]
+          activation: silu
+          norm: group
+          dropout: 0.3
+          order: adn
+          concat: false
+          dist:
+            _target_: torch.nn.MSELoss
+            reduction: none
+      mutate: false
+      valid: true
+    pos: after
+
+  # ── Uncertainty: BayesCap on final head output ──
+
+  - layer_name: head
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: uncertainty
+      data_sources: [input]
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        output_dim: 1
+        hidden_dims: [8, 8, 4]
+        per_dim_uncertainty: false
+        dropout: 0.3
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after

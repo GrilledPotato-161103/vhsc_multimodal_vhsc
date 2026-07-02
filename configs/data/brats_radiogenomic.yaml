@@ -1,0 +1,19 @@
+# RSNA-MICCAI BraTS Radiogenomic DataModule config (in-domain).
+#
+# Transforms are composed via Hydra defaults — train_transform and val_transform
+# arrive as DictConfig nodes that can be passed directly to hydra.utils.instantiate.
+#
+# Usage:
+#   python src/train_hook_dag_mgmt.py data=brats_radiogenomic
+_target_: src.data.brats_radiogenomic.datamodule.BraTSRadiogenomicDataModule
+
+defaults:
+  - train_transform: brats_radiogenomic
+  - val_transform: brats_radiogenomic
+
+labels_csv: data/jepa/brats_radiogenomic/splits/labels.csv
+data_dir: data/jepa/brats_radiogenomic
+modality_keys: [t1, t2, flair]
+
+batch_size: 1
+num_workers: 0

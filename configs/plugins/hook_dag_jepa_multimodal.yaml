@@ -1,0 +1,114 @@
+# Hook DAG plugin config — MultiModalJEPARegressor with 3-modality topology
+# ['t1', 't2', 'flair'] and missing-modality imputation via mean aggregation.
+#
+# Architecture:
+#   T1w MRI    ─► [ViT backbone] ─► encoders.0 (ModalExtractor) ─► ┐
+#   T2w MRI    ─► [ViT backbone] ─► encoders.1 (ModalExtractor) ─► ┤
+#   FLAIR MRI  ─► [ViT backbone] ─► encoders.2 (ModalExtractor) ─► ┤
+#                                                                  ├─► classifier (ModalityFusion) ─► logits
+#                                                                  │
+#   When FLAIR is missing:
+#     encoders.2 never fires → src_flair never pushes to buffer.
+#     Reconstructor (before classifier) collects t1+t2, imputes
+#     flair = mean(t1_latent, t2_latent), mutates classifier input
+#     to a complete {t1, t2, flair} dict.
+#
+#   When all three are present:
+#     Reconstructor passes through — no imputation needed.
+#
+# Breakpoints:
+#   src_t1    (after encoders.0)  — capture T1w ViT tokens  [B, N, 768]
+#   src_t2    (after encoders.1)  — capture T2w ViT tokens  [B, N, 768]
+#   src_flair (after encoders.2)  — capture FLAIR ViT tokens [B, N, 768]  (skipped if missing)
+#   reconstructor (before classifier) — mean-impute missing modalities, mutate=true
+#   uncertainty   (after classifier)  — BayesCap on logits
+#
+# Usage:
+#   python src/train_hook_dag_jepa_brain_age.py --config-name train_hook_dag_jepa_multimodal
+
+target: MultiModalJEPARegressor
+model_checkpoint: null
+plugins_checkpoint: null
+
+breakpoints:
+
+  # ── Source BPs: capture per-modality ViT token features ──
+  # No callback = pure source — pushes hook output to data_sinks.
+  # Wiring is declared on the reconstructor side via data_sources.
+
+  - layer_name: encoders.0
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_t1
+    pos: after
+
+  - layer_name: encoders.1
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_t2
+    pos: after
+
+  - layer_name: encoders.2
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: src_flair
+    pos: after
+
+  # ── Reconstructor: before classifier, imputes missing modalities ──
+  #
+  # data_sources: [src_t1.0, src_t2.0, src_flair.0]
+  #   Collects ViT token grids from all source BPs.  When a modality is
+  #   missing, its source BP never fires → entry absent from collected.
+  #
+  # pre_fn: MapModalityCollectedFn
+  #   Maps source BP names → modality keys (src_t1 → t1, etc.),
+  #   mean-pools token grids [B,N,768] → [B,768], packages as dict.
+  #
+  # callback: MeanImputeReconstructor
+  #   For any missing key in the fixed topology ['t1','t2','flair'],
+  #   imputes as element-wise mean of all present latents.
+  #   Returns (complete_dict,) — 1-tuple for before-mutate compatibility.
+  #
+  # mutate: true, pos: before
+  #   Replaces classifier input with the imputed-complete dict.
+
+  - layer_name: classifier
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: reconstructor
+      data_sources: [src_t1.0, src_t2.0, src_flair.0]
+      pre_fn:
+        _target_: src.plugins.reconstructor.pool.MapModalityCollectedFn
+        key_map:
+          src_t1: t1
+          src_t2: t2
+          src_flair: flair
+      callback:
+        _target_: src.plugins.reconstructor.pool.MeanImputeReconstructor
+        modality_keys: [t1, t2, flair]
+      mutate: true
+    pos: before
+
+  # ── Uncertainty: BayesCap on classifier output ──
+  #
+  # data_sources: [input] — reads classifier logits.
+  # For a scalar regression target set input_dim: 1, output_dim: 1.
+  # For K-class classification, set input_dim: <num_classes>.
+
+  - layer_name: classifier
+    bp:
+      _target_: src.plugins.hook_dag.Breakpoint
+      name: uncertainty
+      data_sources: [input]
+      callback:
+        _target_: src.plugins.head.bayescap.BayesCap1D
+        input_dim: 1
+        output_dim: 1
+        hidden_dims: [32, 16, 8]
+        per_dim_uncertainty: false
+        dropout: 0.3
+        norm: batch
+        activation: silu
+      mutate: false
+      valid: true
+    pos: after

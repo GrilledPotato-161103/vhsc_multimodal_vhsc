@@ -1,0 +1,24 @@
+#
+# Validation / inference transform pipeline for BraTS Radiogenomic.
+# Operates on dict keys: [t1, t2, flair, label].
+# allow_missing_keys: true — modalities may be absent (e.g., missing file).
+
+_target_: monai.transforms.Compose
+transforms:
+  - _target_: monai.transforms.EnsureTyped
+    keys: [t1, t2, flair]
+    data_type: "tensor"
+    track_meta: true
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.Resized
+    keys: [t1, t2, flair]
+    spatial_size: [96, 108, 96]
+    mode: "trilinear"
+    align_corners: true
+    allow_missing_keys: true
+
+  - _target_: monai.transforms.ToTensord
+    keys: [t1, t2, flair]
+    dtype: "float32"
+    allow_missing_keys: true

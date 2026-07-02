@@ -1,0 +1,46 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: jepa_brain_age
+  - model: hook_dag_jepa_brain_age
+  - plugins: hook_dag_jepa_brain_age
+  - callbacks: default
+  - logger: wandb
+  - trainer: default
+  - paths: default
+  - extras: default
+  - hydra: default
+  - experiment: null
+  - hparams_search: null
+  - optional local: default
+  - debug: null
+
+data:
+  batch_size: 4
+  num_workers: 4
+
+logger:
+  wandb:
+    project: "VHSC_BrainAge_JEPA"
+    name: jepa_brain_age_hook_${now:%Y-%m-%d}_${now:%H-%M-%S}
+    offline: true
+
+task_name: "train_jepa_brain_age"
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+
+  early_stopping:
+    monitor: "val/loss_nll_best"
+    mode: "min"
+    patience: 20
+
+tags: ["jepa", "brain_age", "hook_dag"]
+
+train: True
+test: True
+ckpt_path: null
+seed: 42

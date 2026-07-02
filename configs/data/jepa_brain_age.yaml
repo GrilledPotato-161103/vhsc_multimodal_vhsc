@@ -1,0 +1,12 @@
+_target_: src.data.jpa_brain_age_datamodule.JEPABrainAgeDataModule
+
+mode: synthetic
+n_samples: 256
+image_size: [96, 108, 96]
+in_chans: 1
+age_range: [45.0, 85.0]
+batch_size: 4
+num_workers: 4
+val_ratio: 0.15
+test_ratio: 0.15
+seed: 42
