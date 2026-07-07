@@ -12,7 +12,8 @@ breakpoints:
         d_2: 16
         hidden_dim: 16
         activation: silu
-        norm: batch
+        norm: layer       # layer (not batch): vmap(jacrev) through ln12/ln21
+                          # needs per-sample norm; BatchNorm breaks under vmap.
         dropout: 0.3
         order: adn
         concat: true

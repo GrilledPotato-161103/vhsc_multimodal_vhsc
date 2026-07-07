@@ -221,12 +221,20 @@ class EKFBiModalInferer(nn.Module):
         assert self.predictor is not None, "Prediction head is None"
         recon_fn = self.get_recon_fn(signal=signal)
         pred_fn = self.predictor.forward
+        # The EKF Jacobian J_f = vmap(jacrev(recon_fn)) runs through the
+        # reconstructor (ln12/ln21). Force it to eval so dropout is OFF: vmap
+        # rejects random ops, and J_f must be deterministic anyway. The recon-loss
+        # forward already ran this batch, so toggling here is safe. Restore after.
+        recon_was_training = self.reconstructor.training
+        self.reconstructor.eval()
         if self.prop_mode == "second_order":
             sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation_second_order(
                 z, sigma_z=sigma_z, reconstructor_fn=recon_fn, predictor_fn=pred_fn)
         else:
             sigma_pred_sq, diag_sigma_recon, J_f, J_g = full_ekf_propagation_full(
                 z, sigma_z=sigma_z, reconstructor_fn=recon_fn, predictor_fn=pred_fn)
+        if recon_was_training:
+            self.reconstructor.train()   # restore mode for next batch's recon-loss forward
         if len(sigma_pred_sq.shape) < 2:
             sigma_pred_sq = sigma_pred_sq.unsqueeze_(-1)
 

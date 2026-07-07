@@ -222,7 +222,9 @@ class ModelEKFInjectModule(LightningModule):
         # EKF Propagation. sigma_z is per-sample full covariance.
         # CycleSigmaZ needs raw inputs; other providers ignore x1/x2.
         z = torch.cat(srcs, dim=-1).detach()
-        sigma_z = self.sigma_z_provider(z, x1=x1, x2=x2)  # (B, d_z, d_z)
+        # Signal-aware: cycle shift is measured on AVAILABLE modalities only;
+        # missing-modality input variance is zeroed (its latent is reconstructed).
+        sigma_z = self.sigma_z_provider(z, x1=x1, x2=x2, signal=tuple(sigs))  # (B, d_z, d_z)
         # xy = raw input coords for aleatoric head when input_mode='xy'
         xy = torch.cat([x1, x2], dim=-1)  # (B, 2)
         inv_alpha, beta, sigma_ep, sigma_al = self.ekf_net(z, sigma_z, signal=sigs, xy=xy)
@@ -471,11 +473,15 @@ class ModelEKFInjectModule(LightningModule):
         self._test_total.append(sigma_total.detach().flatten().cpu())
         self._test_ep.append(sep.detach().cpu())
         self._test_al.append(sal.detach().cpu())
+        # Per-sample availability tag: 2=both, 1=one missing (this batch's signal).
+        n_avail = int(signal[0]) + int(signal[1])
+        self._test_navail.append(torch.full((sep.numel(),), n_avail))
 
     def on_test_epoch_start(self):
         self._test_err, self._test_var = [], []
         self._test_total, self._test_ep, self._test_al = [], [], []
         self._test_pos = []
+        self._test_navail = []
         print("Testing and Ablation study on epoch", self.current_epoch)
         return super().on_test_epoch_start()
 
@@ -529,6 +535,16 @@ class ModelEKFInjectModule(LightningModule):
         cell_pcc8,  cell_sp8  = _cell_pcc(8)
         cell_pcc12, cell_sp12 = _cell_pcc(12)
 
+        # Per-availability breakdown: do MISSING-modality samples get higher variance?
+        # This is the core missing-modality validation (see formalism/08).
+        navail = torch.cat(self._test_navail)
+        both = navail == 2; miss = navail == 1
+        def _grp_mean(t, m):
+            return t[m].float().mean().item() if m.any() else float('nan')
+        var_both = _grp_mean(tot, both); var_miss = _grp_mean(tot, miss)
+        ep_both  = _grp_mean(sep, both); ep_miss  = _grp_mean(sep, miss)
+        err_both = _grp_mean(err, both); err_miss = _grp_mean(err, miss)
+
         results = {
             "test/PCC_predvar_err":      _pcc(var, err),
             "test/PCC_total_err":        _pcc(tot, err),
@@ -545,6 +561,13 @@ class ModelEKFInjectModule(LightningModule):
             "test/CellSpearman_8":  cell_sp8,
             "test/CellPCC_12": cell_pcc12,
             "test/CellSpearman_12": cell_sp12,
+            # Per-availability means (missing-modality validation)
+            "test/var_both":  var_both,
+            "test/var_miss":  var_miss,
+            "test/ep_both":   ep_both,
+            "test/ep_miss":   ep_miss,
+            "test/err_both":  err_both,
+            "test/err_miss":  err_miss,
         }
         for k, v in results.items():
             self.log(k, v, sync_dist=True)
@@ -552,6 +575,13 @@ class ModelEKFInjectModule(LightningModule):
         print("\n===== TEST CORRELATIONS (uncertainty vs squared error) =====")
         for k, v in results.items():
             print(f"  {k:32s} = {v:+.4f}")
+        print("----- MISSING-MODALITY CHECK (mean over group) -----")
+        print(f"  predictive var : both={var_both:.4e}  missing={var_miss:.4e}  "
+              f"ratio={var_miss/max(var_both,1e-12):.2f}x")
+        print(f"  epistemic var  : both={ep_both:.4e}  missing={ep_miss:.4e}  "
+              f"ratio={ep_miss/max(ep_both,1e-12):.2f}x")
+        print(f"  actual error   : both={err_both:.4e}  missing={err_miss:.4e}  "
+              f"ratio={err_miss/max(err_both,1e-12):.2f}x")
         print("=============================================================\n")
 
     def setup(self, stage: str) -> None:

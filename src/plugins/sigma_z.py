@@ -61,7 +61,7 @@ class SDSigmaZ(nn.Module):
         delta = z - self.mu_A
         return ((delta @ self.sigma_A_inv) * delta).sum(-1).clamp_min(0.0) / self.d_z
 
-    def forward(self, z, x1=None, x2=None):
+    def forward(self, z, x1=None, x2=None, signal=(1, 1)):
         amp = self.amplitude(z)
         return amp.view(-1, 1, 1) * self.sigma_A.unsqueeze(0)
 
@@ -132,28 +132,57 @@ class CycleSigmaZ(nn.Module):
         else:
             self.register_buffer("sigma_A", torch.eye(self.d_z, device=device))
 
-        # source-amplitude baseline: mean cycle error on source (for normalisation)
+        # PER-MODALITY source baselines (for signal-aware normalisation).
         with torch.no_grad():
             e1 = (dec1(z1_A) - x1_A).pow(2).mean(-1)
             e2 = (dec2(z2_A) - x2_A).pow(2).mean(-1)
-            baseline = (e1 + e2).mean().clamp_min(1e-6)
+            b1 = e1.mean().clamp_min(1e-6)
+            b2 = e2.mean().clamp_min(1e-6)
+            baseline = (e1 + e2).mean().clamp_min(1e-6)   # kept for back-compat
         self.register_buffer("cycle_baseline", baseline)
-        print(f"[CycleSigmaZ] source cycle baseline = {baseline.item():.5f}")
+        self.register_buffer("b1", b1)
+        self.register_buffer("b2", b2)
+        print(f"[CycleSigmaZ] source baselines: b1={b1.item():.5f} b2={b2.item():.5f}")
 
     @torch.no_grad()
-    def amplitude(self, z, x1, x2):
-        """s_cyc(x) = (||x1 - g1(z1)||^2 + ||x2 - g2(z2)||^2) / baseline."""
-        z1 = z[:, :self.d_half]
-        z2 = z[:, self.d_half:]
-        e1 = (self.dec1(z1) - x1).pow(2).mean(-1)
-        e2 = (self.dec2(z2) - x2).pow(2).mean(-1)
-        return ((e1 + e2) / self.cycle_baseline).clamp_min(0.0)
+    def per_modality_shift(self, z, x1, x2, signal=(1, 1)):
+        """Per-modality cycle amplitude, ZEROED on missing modalities.
 
-    def forward(self, z, x1=None, x2=None):
+        Availability (reconstructor convention, ln12/ln21):
+          modality 1 available  iff signal[1] == 1   (mod_1 reconstructed when p2==0)
+          modality 2 available  iff signal[0] == 1   (mod_2 reconstructed when p1==0)
+        A missing modality contributes 0 input variance: its latent will be
+        REPLACED by a reconstruction downstream, and the EKF Jacobian J_f zeros
+        its input column anyway, so 0 is exact (see formalism/08).
+        """
+        B = z.shape[0]
+        z1 = z[:, :self.d_half]; z2 = z[:, self.d_half:]
+        avail_1 = (signal[1] == 1)
+        avail_2 = (signal[0] == 1)
+        if avail_1:
+            s1 = (self.dec1(z1) - x1).pow(2).mean(-1) / self.b1
+        else:
+            s1 = torch.zeros(B, device=z.device)
+        if avail_2:
+            s2 = (self.dec2(z2) - x2).pow(2).mean(-1) / self.b2
+        else:
+            s2 = torch.zeros(B, device=z.device)
+        return s1.clamp_min(0.0), s2.clamp_min(0.0)
+
+    def forward(self, z, x1=None, x2=None, signal=(1, 1)):
         assert x1 is not None and x2 is not None, \
             "CycleSigmaZ requires x1, x2 (raw inputs) in forward()"
-        amp = self.amplitude(z, x1, x2)
-        return amp.view(-1, 1, 1) * self.sigma_A.unsqueeze(0)
+        s1, s2 = self.per_modality_shift(z, x1, x2, signal=signal)
+        # Per-coordinate diagonal scale: s1 over modality-1 coords, s2 over modality-2.
+        scale = torch.cat([
+            s1.unsqueeze(-1).expand(-1, self.d_half),
+            s2.unsqueeze(-1).expand(-1, self.d_half),
+        ], dim=-1)                                   # (B, d_z)
+        # Sigma_z = D^{1/2} Phi D^{1/2}: for Phi=I gives diag(scale); for full Sigma_A
+        # scales row i / col j by sqrt(s_i) sqrt(s_j) (stays PSD). Missing coords -> 0.
+        rt = scale.clamp_min(0.0).sqrt()             # (B, d_z)
+        Sigma = rt.unsqueeze(-1) * self.sigma_A.unsqueeze(0) * rt.unsqueeze(-2)
+        return Sigma                                 # (B, d_z, d_z)
 
 
 class GMMSigmaZ(nn.Module):
@@ -216,7 +245,7 @@ class GMMSigmaZ(nn.Module):
         self.d_z = d_z
         self.K = n_clusters
 
-    def forward(self, z, x1=None, x2=None):
+    def forward(self, z, x1=None, x2=None, signal=(1, 1)):
         B = z.shape[0]
         # Mahalanobis distance to each cluster: (B, K)
         delta = z.unsqueeze(1) - self.mu_k.unsqueeze(0)         # (B, K, d)
@@ -267,7 +296,7 @@ class PCASigmaZ(nn.Module):
         self.k = n_components
         self.off_dim = d_z - n_components
 
-    def forward(self, z, x1=None, x2=None):
+    def forward(self, z, x1=None, x2=None, signal=(1, 1)):
         delta = z - self.mu_A                                       # (B, d_z)
         on_manifold = delta @ self.U_k @ self.U_k.T                 # (B, d_z)
         off_manifold = delta - on_manifold                          # (B, d_z)
