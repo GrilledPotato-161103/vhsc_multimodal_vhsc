@@ -44,9 +44,10 @@ class AdversarialVizCallback(pl.Callback):
         self.positions = []
         self.losses = []
         self.variances = []
+        self.sigma_als = []
         self.logits = []
         self.y = []
-    
+
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         # print(len(outputs))
         if pl_module.current_epoch < pl_module.hparams.epoch_phase:
@@ -61,9 +62,17 @@ class AdversarialVizCallback(pl.Callback):
                         on_step=True,
                         on_epoch=True,
                         prog_bar=False)
+        # Also log PCC between sigma_al alone and loss — tells us if the aleatoric
+        # head is capturing function complexity independently of the epistemic term.
+        if "sigma_al" in unc:
+            sal = unc["sigma_al"].flatten().clamp_min(0.0)
+            pcc_al = pearson_correlation(loss[indices], sal[indices])
+            pl_module.log("val/pcc_aleatoric", pcc_al.item(), on_step=True, on_epoch=True)
+
         self.positions.append(positions)
         self.losses.append(loss)
         self.variances.append(variance)
+        self.sigma_als.append(unc.get("sigma_al", variance).flatten().detach().cpu())
         self.y.append(y)
         self.logits.append(logits)
         return super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
@@ -105,15 +114,15 @@ class AdversarialVizCallback(pl.Callback):
         loss_grid = np.clip(loss_grid, 0, 20)
 
         var_grid = rasterize(variances)
-        # NOTE: do not clip at a small ceiling — under OOD or head collapse
-        # the variance can be much larger than 20, and clipping erases all
-        # spatial structure into a uniform ceiling.
         var_grid = np.nan_to_num(var_grid, nan=0.0, posinf=1e6, neginf=0.0)
 
-        # 4. Làm mịn và tính Covariance (Local Covariance)
-        # E[L], E[V], E[L*V] thông qua Gaussian filter
+        sigma_als_np = np.concatenate([s.numpy() for s in self.sigma_als]).flatten()
+        al_grid = rasterize(sigma_als_np)
+        al_grid = np.nan_to_num(al_grid, nan=0.0, posinf=1e6, neginf=0.0)
+
         loss_smooth = gaussian_filter(loss_grid, sigma=self.smooth)
-        var_smooth = gaussian_filter(var_grid, sigma=self.smooth)
+        var_smooth  = gaussian_filter(var_grid,  sigma=self.smooth)
+        al_smooth   = gaussian_filter(al_grid,   sigma=self.smooth)
         # 5. Vẽ Plotly Charts
         figs_to_log = {}
 
@@ -138,6 +147,7 @@ class AdversarialVizCallback(pl.Callback):
 
         # --- C. Variance Map ---
         figs_to_log["val_plot/Log_Variance_Map"] = create_heatmap(np.log(var_smooth + 1e-6), "plasma", title="Log Variance Field")
+        figs_to_log["val_plot/Log_Aleatoric_Map"] = create_heatmap(np.log(al_smooth + 1e-6), "magma", title="Log Aleatoric (sigma_al)")
         figs_to_log["val_plot/Logit_GT_Map"] = create_heatmap(logits_y_grid, 'plasma', title="Logits/GT Field")
         figs_to_log["val_plot/Log_Loss_Map"] = create_heatmap(np.log(loss_smooth + 1e-6), 'plasma', title="Log Loss Field")
 

@@ -43,3 +43,6 @@ mask_rate: 0.
 
 source_x_range: ${plugins.sigma_z.source_x_range}
 n_source_samples: ${plugins.sigma_z.n_source_samples}
+sigma_z_type: ${plugins.sigma_z.type}
+lambda_aux: 0.3      # validated winner (cf2/cf6): NLL=-2.03, PCC=0.88
+aux_mode: "linear"   # "linear" beat "log" (cf5); heavy-tail reweighting did not help

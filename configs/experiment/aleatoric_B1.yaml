@@ -1,0 +1,14 @@
+# @package _global_
+# Attempt B1: lambda=0.1 — aleatoric down-weighted, epistemic dominant
+defaults:
+  - override /model/ekf_net: default
+model:
+  ekf_net:
+    use_aleatoric: true
+    aleatoric_hidden_dim: 32
+    aleatoric_n_layers: 2
+    lambda_aleatoric: 0.1
+logger:
+  wandb:
+    name: "aleatoric_B1_lam01_${now:%H-%M-%S}"
+    tags: ["aleatoric", "B1", "lam0.1"]
