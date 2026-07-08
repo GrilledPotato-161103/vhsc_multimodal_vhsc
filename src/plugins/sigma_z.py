@@ -4,48 +4,9 @@ import torch.nn.functional as F
 from torch.func import jacrev
 from torch.utils.data import Dataset
 
-# ---------------------------------------------------------------------------
-# Shared helper: fit source latents given encoders + x_range
-# ---------------------------------------------------------------------------
-
-def _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device):
-    """Draw source samples, encode, return (z_A, x1_A, x2_A)."""
-    a, b = x_range
-    gen = torch.Generator(device=device).manual_seed(0)
-    x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
-    x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
-    was1, was2 = encoder1.training, encoder2.training
-    encoder1.eval(); encoder2.eval()
-    with torch.no_grad():
-        z1 = encoder1(x1)
-        z2 = encoder2(x2)
-    if was1: encoder1.train()
-    if was2: encoder2.train()
-    return torch.cat([z1, z2], dim=-1), x1, x2, z1, z2
-
-
-def _fit_sigma_A(z_A, cov_floor, shrinkage, device):
-    """Fit shrunk, eigen-clamped Gaussian to source latents. Returns (mu, Sigma, Sigma_inv)."""
-    d_z = z_A.shape[1]
-    mu_A = z_A.mean(0)
-    centered = z_A - mu_A
-    sigma_A = (centered.T @ centered) / (z_A.shape[0] - 1)
-    eye = torch.eye(d_z, device=device)
-    mean_var = sigma_A.diagonal().mean()
-    sigma_A = (1.0 - shrinkage) * sigma_A + shrinkage * mean_var * eye
-    sigma_A = sigma_A + cov_floor * eye
-    evals, evecs = torch.linalg.eigh(sigma_A)
-    evals = evals.clamp_min(cov_floor)
-    sigma_A_inv = (evecs / evals) @ evecs.T
-    print(f"  Sigma_A: min_eval={evals.min():.3e}  max_eval={evals.max():.3e}  "
-          f"cond={evals.max()/evals.min():.3e}")
-    return mu_A, sigma_A, sigma_A_inv
-
-
 class SDSigmaZ(nn.Module):
-    """Single-Gaussian Mahalanobis, formalism doc 01."""
+    """Source-dependent input-shift covariance provider (Option B in the formalism).
 
-<<<<<<< HEAD
     Fits a single Gaussian N(mu_A, Sigma_A) on source latents at init time, then
     at inference returns per-sample full Sigma_z(z) = (d_M^2(z) / d_z) * Sigma_A,
     with d_M^2 the Mahalanobis distance from z to (mu_A, Sigma_A).
@@ -119,7 +80,47 @@ class SDSigmaZ(nn.Module):
               f"min={z_A.var(dim=0).min().item():.3e}  "
               f"max={z_A.var(dim=0).max().item():.3e}")
 
-=======
+# ---------------------------------------------------------------------------
+# Shared helper: fit source latents given encoders + x_range
+# ---------------------------------------------------------------------------
+
+def _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device):
+    """Draw source samples, encode, return (z_A, x1_A, x2_A)."""
+    a, b = x_range
+    gen = torch.Generator(device=device).manual_seed(0)
+    x1 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+    x2 = torch.rand(n_source_samples, 1, generator=gen, device=device) * (b - a) + a
+    was1, was2 = encoder1.training, encoder2.training
+    encoder1.eval(); encoder2.eval()
+    with torch.no_grad():
+        z1 = encoder1(x1)
+        z2 = encoder2(x2)
+    if was1: encoder1.train()
+    if was2: encoder2.train()
+    return torch.cat([z1, z2], dim=-1), x1, x2, z1, z2
+
+
+def _fit_sigma_A(z_A, cov_floor, shrinkage, device):
+    """Fit shrunk, eigen-clamped Gaussian to source latents. Returns (mu, Sigma, Sigma_inv)."""
+    d_z = z_A.shape[1]
+    mu_A = z_A.mean(0)
+    centered = z_A - mu_A
+    sigma_A = (centered.T @ centered) / (z_A.shape[0] - 1)
+    eye = torch.eye(d_z, device=device)
+    mean_var = sigma_A.diagonal().mean()
+    sigma_A = (1.0 - shrinkage) * sigma_A + shrinkage * mean_var * eye
+    sigma_A = sigma_A + cov_floor * eye
+    evals, evecs = torch.linalg.eigh(sigma_A)
+    evals = evals.clamp_min(cov_floor)
+    sigma_A_inv = (evecs / evals) @ evecs.T
+    print(f"  Sigma_A: min_eval={evals.min():.3e}  max_eval={evals.max():.3e}  "
+          f"cond={evals.max()/evals.min():.3e}")
+    return mu_A, sigma_A, sigma_A_inv
+
+
+class SDSigmaZ(nn.Module):
+    """Single-Gaussian Mahalanobis, formalism doc 01."""
+
     def __init__(self, encoder1, encoder2, x_range=(-1., 1.),
                  n_source_samples=5000, device="cuda",
                  cov_floor=1e-4, shrinkage=0.1):
@@ -127,7 +128,6 @@ class SDSigmaZ(nn.Module):
         print("[SDSigmaZ] fitting source Gaussian...")
         z_A, _, _, _, _ = _sample_source_latents(encoder1, encoder2, x_range, n_source_samples, device)
         mu_A, sigma_A, sigma_A_inv = _fit_sigma_A(z_A, cov_floor, shrinkage, device)
->>>>>>> f4ea00808caa3beff81a7be3cbb65ec303cd8b04
         self.register_buffer("mu_A", mu_A)
         self.register_buffer("sigma_A", sigma_A)
         self.register_buffer("sigma_A_inv", sigma_A_inv)

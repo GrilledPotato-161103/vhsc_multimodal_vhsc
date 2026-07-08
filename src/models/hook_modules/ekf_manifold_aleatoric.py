@@ -160,8 +160,34 @@ class ModelEKFManifoldModule(LightningModule):
         # EKF Propagation Reversed Jacobian = Latent-dim x forwards (I don't know, it just very expensive)
         z = torch.cat(srcs, dim=-1).detach()
         sigma_z = self.sigma_z_provider(z)  # (B, d_z, d_z)
-        inv_alpha, beta, sigma_pred_sq = self.ekf_net(z, sigma_z, logits, signal=sigs)
+        # sigma_pred_sq Epistemic variance from EKF propagation. 
+        inv_alpha, beta, sigma_pred_sq, sigma_al = self.ekf_net(z, sigma_z, logits, signal=sigs)
         ekf_nll = self.unc_criterion(y_true=y, y_hat=logits, mu=logits, inv_alpha=inv_alpha, beta=beta)
+
+        # Auxiliary regression loss: supervise sigma_TOTAL to match (y-ŷ)².
+        # sigma_total = sigma_ep + lambda_al * sigma_al should explain the full residual.
+        # Supervising sigma_al alone against (y-ŷ)² was wrong — it caused sigma_al
+        # to absorb the OOD-driven epistemic error that sigma_ep already covers,
+        # producing an OOD ramp in the aleatoric map (leak from sigma_ep's signal).
+        # By supervising sigma_total, sigma_al only needs to cover what sigma_ep misses.
+        sigma_ep = sigma_pred_sq
+        if self.hparams.lambda_aux > 0.0:
+            lam = float(getattr(self.ekf_net, 'lambda_aleatoric', 1.0))
+            sigma_total_for_aux = sigma_ep.detach() + lam * sigma_al   # (B, 1)
+            residual_sq = loss.detach()                                  # (B, 1)
+            if getattr(self.hparams, 'aux_mode', 'linear') == 'log':
+                # Log-space: scale-invariant, equalizes gradient weight across error
+                # magnitudes -> redistributes from the OOD tail to the ID bulk,
+                # which lifts rank (Spearman) alignment.
+                eps = 1e-6
+                aux_loss = torch.nn.functional.mse_loss(
+                    torch.log(sigma_total_for_aux + eps),
+                    torch.log(residual_sq + eps))
+            else:
+                aux_loss = torch.nn.functional.mse_loss(sigma_total_for_aux, residual_sq)
+        else:
+            aux_loss = sigma_al.new_tensor(0.0)
+            
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
                 {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"],

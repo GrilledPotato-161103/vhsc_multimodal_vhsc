@@ -16,141 +16,8 @@ import rootutils
 rootutils.setup_root(search_from=__file__, indicator=".project-root", pythonpath=True)
 from src.models.components.toy import MLP, Residual, get_normalization
 from src.plugins.var import BreakpointContext, BreakpointOutput
+from src.plugins.head.aleatoric import AleatoricHead
 from src.plugins.ekf_propagation import *
-
-
-class AleatoricHead(nn.Module):
-    """Learned aleatoric uncertainty head.
-
-    Maps concat(z, log_sigma_ep) -> sigma_al (strictly positive).
-    Captures in-distribution function complexity that the EKF epistemic
-    term misses. Combined with sigma_ep via:
-        sigma_total = sigma_ep + lambda_aleatoric * sigma_al
-
-    input_mode:
-      "z_and_sep" (default): concat(z, log_sigma_ep) — OOD-aware aleatoric
-      "z_only":               z only — pure function complexity, ignores shift
-
-    See formalism/06_empirical_validation.md §6 and the implementation plan.
-    """
-
-    def __init__(self,
-                 z_dim: int = 32,
-                 hidden_dim: int = 32,
-                 n_layers: int = 2,
-                 activation: str = "silu",
-                 norm: str = "layer",
-                 eps: float = 1e-6,
-                 input_mode: str = "z_and_sep",
-                 xy_dim: int = 2):
-        super().__init__()
-        self.eps = eps
-        self.input_mode = input_mode
-        act = {"relu": nn.ReLU, "silu": nn.SiLU, "gelu": nn.GELU}[activation]
-        if input_mode == "xy":
-            in_dim = xy_dim          # raw input coords bypass z entirely
-        elif input_mode == "z_only":
-            in_dim = z_dim
-        else:
-            in_dim = z_dim + 1       # z + log_sigma_ep
-        layers: list[nn.Module] = [nn.Linear(in_dim, hidden_dim, bias=True), act()]
-        for _ in range(n_layers - 1):
-            layers += [nn.Linear(hidden_dim, hidden_dim),
-                       get_normalization(norm, hidden_dim),
-                       act()]
-        out_layer = nn.Linear(hidden_dim, 1)
-        # Init bias so Softplus(bias) ≈ 0 at start — prevents early domination.
-        nn.init.constant_(out_layer.bias, -3.0)
-        nn.init.xavier_uniform_(out_layer.weight)
-        layers.append(out_layer)
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, z: torch.Tensor, sigma_ep: torch.Tensor,
-                xy: torch.Tensor | None = None) -> torch.Tensor:
-        """
-        Args:
-            z:        (B, z_dim) latent features
-            sigma_ep: (B, 1) epistemic variance from EKF
-            xy:       (B, xy_dim) raw input coords — required when input_mode='xy'
-        Returns:
-            sigma_al: (B, 1) strictly positive aleatoric variance
-        """
-        if self.input_mode == "xy":
-            assert xy is not None, "xy required when input_mode='xy'"
-            feat = xy.detach()
-        elif self.input_mode == "z_only":
-            feat = z.detach()
-        else:
-            log_sep = torch.log(sigma_ep.detach().clamp_min(self.eps))
-            feat = torch.cat([z.detach(), log_sep], dim=-1)
-        return F.softplus(self.net(feat)) + self.eps                 # (B, 1)
-
-
-class AleatoricHead(nn.Module):
-    """Learned aleatoric uncertainty head.
-
-    Maps concat(z, log_sigma_ep) -> sigma_al (strictly positive).
-    Captures in-distribution function complexity that the EKF epistemic
-    term misses. Combined with sigma_ep via:
-        sigma_total = sigma_ep + lambda_aleatoric * sigma_al
-
-    input_mode:
-      "z_and_sep" (default): concat(z, log_sigma_ep) — OOD-aware aleatoric
-      "z_only":               z only — pure function complexity, ignores shift
-
-    See formalism/06_empirical_validation.md §6 and the implementation plan.
-    """
-    def __init__(self,
-                 z_dim: int = 32,
-                 hidden_dim: int = 32,
-                 n_layers: int = 2,
-                 activation: str = "silu",
-                 norm: str = "layer",
-                 eps: float = 1e-6,
-                 input_mode: str = "z_and_sep",
-                 xy_dim: int = 2):
-        super().__init__()
-        self.eps = eps
-        self.input_mode = input_mode
-        act = {"relu": nn.ReLU, "silu": nn.SiLU, "gelu": nn.GELU}[activation]
-        if input_mode == "xy":
-            in_dim = xy_dim          # raw input coords bypass z entirely
-        elif input_mode == "z_only":
-            in_dim = z_dim
-        else:
-            in_dim = z_dim + 1       # z + log_sigma_ep
-        layers: list[nn.Module] = [nn.Linear(in_dim, hidden_dim, bias=True), act()]
-        for _ in range(n_layers - 1):
-            layers += [nn.Linear(hidden_dim, hidden_dim),
-                       get_normalization(norm, hidden_dim),
-                       act()]
-        out_layer = nn.Linear(hidden_dim, 1)
-        # Init bias so Softplus(bias) ≈ 0 at start — prevents early domination.
-        nn.init.constant_(out_layer.bias, -3.0)
-        nn.init.xavier_uniform_(out_layer.weight)
-        layers.append(out_layer)
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, z: torch.Tensor, sigma_ep: torch.Tensor,
-                xy: torch.Tensor | None = None) -> torch.Tensor:
-        """
-        Args:
-            z:        (B, z_dim) latent features
-            sigma_ep: (B, 1) epistemic variance from EKF
-            xy:       (B, xy_dim) raw input coords — required when input_mode='xy'
-        Returns:
-            sigma_al: (B, 1) strictly positive aleatoric variance
-        """
-        if self.input_mode == "xy":
-            assert xy is not None, "xy required when input_mode='xy'"
-            feat = xy.detach()
-        elif self.input_mode == "z_only":
-            feat = z.detach()
-        else:
-            log_sep = torch.log(sigma_ep.detach().clamp_min(self.eps))
-            feat = torch.cat([z.detach(), log_sep], dim=-1)
-        return F.softplus(self.net(feat)) + self.eps                 # (B, 1)
-
 
 class EKFBiModalInferer(nn.Module):
     def __init__(self,
@@ -172,20 +39,8 @@ class EKFBiModalInferer(nn.Module):
                     prop_mode: str = "first_order",
                     beta_min: float = 0.5,
                     beta_max: float = 4.0,
-<<<<<<< HEAD
                     aleatoric_net: Optional[AleatoricHead] = None,
                     lambda_aleatoric: float = 1.0,
-                    prop_mode: str = "first_order"
-=======
-                    use_aleatoric: bool = False,
-                    aleatoric_hidden_dim: int = 32,
-                    aleatoric_n_layers: int = 2,
-                    aleatoric_activation: str = "silu",
-                    aleatoric_norm: str = "layer",
-                    aleatoric_input_mode: str = "z_only",
-                    aleatoric_xy_dim: int = 2,
-                    lambda_aleatoric: float = 1.0,
->>>>>>> f4ea00808caa3beff81a7be3cbb65ec303cd8b04
                     ):
         # We gonna take
         super().__init__()
@@ -208,20 +63,7 @@ class EKFBiModalInferer(nn.Module):
         self.prop_mode = prop_mode
         self.lambda_aleatoric = lambda_aleatoric
         bottleneck_dim = bottleneck_dim or hidden_dims[-1]
-
-        if use_aleatoric:
-            self.aleatoric_net = AleatoricHead(
-                z_dim=latent_size,
-                hidden_dim=aleatoric_hidden_dim,
-                n_layers=aleatoric_n_layers,
-                activation=aleatoric_activation,
-                norm=aleatoric_norm,
-                input_mode=aleatoric_input_mode,
-                xy_dim=aleatoric_xy_dim,
-                eps=eps,
-            )
-        else:
-            self.aleatoric_net = None
+        self.aleatoric_net = aleatoric_net
 
         if activation == "relu":
             act = nn.ReLU
@@ -302,12 +144,8 @@ class EKFBiModalInferer(nn.Module):
             return self.reconstructor.forward_raw(z, signal=signal)
         return infer
     
-<<<<<<< HEAD
-    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, pred: torch.Tensor, signal: tuple = (1, 1)):
-=======
-    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, signal: tuple = (1, 1),
+    def forward(self, z: torch.Tensor, sigma_z: torch.Tensor, pred: torch.Tensor, signal: tuple = (1, 1),
                 xy: torch.Tensor | None = None):
->>>>>>> f4ea00808caa3beff81a7be3cbb65ec303cd8b04
         """
         Args:
             z:       (B, d_z) latent batch
@@ -339,8 +177,6 @@ class EKFBiModalInferer(nn.Module):
         # Epistemic variance from EKF propagation.
         sigma_ep = sigma_pred_sq   # (B, 1)
 
-        # Aleatoric variance: learned MLP on z + log(sigma_ep).
-        # Zero if use_aleatoric=False (aleatoric_net is None).
         if self.aleatoric_net is not None:
             sigma_al = self.aleatoric_net(z, sigma_ep, xy=xy)    # (B, 1)
             sigma_total = sigma_ep + self.lambda_aleatoric * sigma_al
@@ -360,93 +196,11 @@ class EKFBiModalInferer(nn.Module):
         beta_stem = self.beta_stem(S_f / torch.amax(S_f, dim=-1, keepdim=True))
         beta_raw = self.beta_net(beta_stem)
         beta = self.beta_min + (self.beta_max - self.beta_min) * torch.sigmoid(beta_raw)
-<<<<<<< HEAD
         # Feed the EKF variance in log-space so the head sees a well-scaled signal
         # regardless of whether sigma_pred_sq is 1e-4 or 1e4.
         ekf_feat = torch.log(torch.cat([sigma_pred_sq, diag_sigma_recon], dim=-1)).clamp_min(self.eps)
         # print(ekf_feat.shape)
         inv_alpha_stem = self.inv_alpha_stem(ekf_feat)
         inv_alpha = F.softplus(self.inv_alpha_net(inv_alpha_stem)) + self.eps
-        return pred, inv_alpha, beta, sigma_pred_sq
+        return pred, inv_alpha, beta, sigma_pred_sq, sigma_al
         
-=======
-        # inv_alpha_net sees sigma_total (not just sigma_ep) so it adapts to the
-        # combined epistemic + aleatoric variance.
-        ekf_feat = torch.log(torch.cat([sigma_total, diag_sigma_recon], dim=-1).clamp_min(self.eps))
-        inv_alpha = F.softplus(self.inv_alpha_net(ekf_feat)) + self.eps
-        return inv_alpha, beta, sigma_ep, sigma_al
-        
-class EKFGGDNLLLoss(nn.Module):
-    """Generalized Gaussian NLL where alpha = sqrt(sigma_pred_sq) from EKF chain.
-
-    The existing BayesCap1D neural head is NOT used here; alpha is sourced
-    directly from the EKF Jacobian propagation. beta is the only learned parameter.
-    """
-
-    def __init__(self, eps: float = 1e-8, learn_calibration: bool = False):
-        """
-        Args:
-            eps: numerical floor for alpha to prevent log(0)
-            learn_calibration: if True, learn affine (a, b) s.t. alpha = a*sqrt(sigma) + b
-        """
-        super().__init__()
-        # log_beta initialized to 0.5 -> beta = exp(0.5) ~ 1.65 (between Laplace and Gaussian)
-        self.log_beta = nn.Parameter(torch.tensor(0.5))
-        self.eps = eps
-        self.learn_calibration = learn_calibration
-        if learn_calibration:
-            self.log_a = nn.Parameter(torch.tensor(0.0))  # a = 1.0
-            self.b = nn.Parameter(torch.tensor(0.0))       # b = 0.0
-
-    def forward(
-        self,
-        y_true: torch.Tensor,
-        mu_pred: torch.Tensor,
-        sigma_pred_sq: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            y_true: (B,) or (B, 1) ground-truth targets
-            mu_pred: (B,) or (B, 1) point predictions from frozen model
-            sigma_pred_sq: (B,) EKF-propagated predictive variance
-
-        Returns:
-            Scalar mean NLL loss
-        """
-        y_true = y_true.squeeze()
-        mu_pred = mu_pred.squeeze()
-        beta = torch.exp(self.log_beta)
-
-        if self.learn_calibration:
-            a = torch.exp(self.log_a)
-            alpha = a * torch.sqrt(sigma_pred_sq + self.eps) + self.b
-        else:
-            alpha = torch.sqrt(sigma_pred_sq + self.eps)
-
-        alpha = alpha.clamp(min=self.eps)
-        residual = torch.abs(y_true - mu_pred)
-        nll = (
-            (residual / alpha) ** beta
-            + torch.log(alpha)
-            + torch.lgamma(1.0 / beta)
-            - torch.log(beta)
-        )
-        return nll.mean()
-
-    def extra_repr(self) -> str:
-        return (f"beta={torch.exp(self.log_beta).item():.3f}, "
-                f"learn_calibration={self.learn_calibration}")
-
-    def get_variance(self, sigma_pred_sq):
-        beta = torch.exp(self.log_beta)
-
-        if self.learn_calibration:
-            a = torch.exp(self.log_a)
-            alpha = a * torch.sqrt(sigma_pred_sq + self.eps) + self.b
-        else:
-            alpha = torch.sqrt(sigma_pred_sq + self.eps)
-
-        alpha = alpha.clamp(min=self.eps)
-
-        return alpha.pow(2) * torch.exp(torch.lgamma(3 / beta) - torch.lgamma(1 / beta))
->>>>>>> f4ea00808caa3beff81a7be3cbb65ec303cd8b04
