@@ -1,5 +1,4 @@
 """Shared utilities for hook-based LightningModules.
-
 Provides common classes and functions used across EKF and BayesCap hook modules
 to eliminate code duplication.
 """
@@ -10,7 +9,6 @@ import torch
 from torch import nn
 
 log = logging.getLogger(__name__)
-
 
 class HuberLoss(nn.Module):
     """Huber loss with configurable threshold.
@@ -29,7 +27,6 @@ class HuberLoss(nn.Module):
         Args:
             pred: Predicted values of shape (...).
             target: Target values of shape (...).
-
         Returns:
             Scalar loss tensor.
         """
@@ -38,7 +35,6 @@ class HuberLoss(nn.Module):
         quadratic = 0.5 * (l1_norm ** 2)
         linear = self.threshold * (l1_norm - 0.5 * self.threshold)
         return torch.where(l1_norm < self.threshold, quadratic, linear).mean()
-
 
 def check_gradient(model: nn.Module) -> None:
     """Log gradient statistics for all parameters of a model.
