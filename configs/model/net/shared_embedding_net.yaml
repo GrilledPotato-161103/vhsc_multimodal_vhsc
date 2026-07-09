@@ -1,0 +1,11 @@
+_target_: src.models.components.shared_embedding.SharedEmbeddingNet
+
+x_dims: 128          # d_proj — broadcast to all n_modals
+n_modals: 3
+encoder_hidden_dims: [256, 256, 512]
+shared_dim: 512
+decoder_hidden_dims: [256, 128]    # reconstruct each d_proj=128 modality
+activation: gelu
+dropout: 0.1
+norm: layer
+use_residual: true

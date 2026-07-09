@@ -33,7 +33,7 @@ beta_max: 4.0
 # "second_order" — adds (1/2)tr((H_g Sigma_recon)^2) (d backward passes per batch,
 #                  fixes Jacobian collapse; ~3-5x slower but calibrated OOD variance)
 prop_mode: "second_order"
-
+lambda_aleatoric: 1.0
 # ---------------------------------------------------------------------------
 # Aleatoric uncertainty head: learns in-distribution function complexity.
 # Combined with epistemic: sigma_total = sigma_ep + lambda_aleatoric * sigma_al

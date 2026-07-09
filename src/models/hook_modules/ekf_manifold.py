@@ -165,8 +165,7 @@ class ModelEKFManifoldModule(LightningModule):
         return loss, logits, y, \
                 {"srcs": srcs, "recon_loss": recon_loss, "unc_loss": recon_unc_loss, "trace": recon_trace, "signal": bp_signal}, \
                 {"var": bayescap_variance_1d(inv_alpha, beta), "loss": ekf_nll["loss"],
-                 "sigma_ep": sigma_ep.detach(), "sigma_al": sigma_al.detach(),
-                 "aux_loss": aux_loss}
+                 "sigma_ep": sigma_pred_sq.detach()}
     
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int

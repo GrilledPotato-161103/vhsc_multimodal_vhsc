@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - data: manifold_shared
+  - model: stage2_regressor
+  - callbacks: default
+  - logger: wandb
+  - trainer: default
+  - paths: default
+  - extras: default
+  - hydra: default
+  - experiment: null
+  - hparams_search: null
+  - optional local: default
+  - debug: null
+
+logger:
+  wandb:
+    project: "VISHC_Manifold_Shared"
+    name: stage2_regressor_${now:%Y-%m-%d}_${now:%H-%M-%S}
+task_name: "train_stage2"
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/rmse_best"
+    mode: "min"
+    save_last: True
+    auto_insert_metric_name: False
+
+# Path to Stage 1 saved net (MUST be overridden via CLI, e.g.):
+#   python src/train/train_stage2.py stage1_ckpt_path=logs/.../stage1_shared_embedding.pth
+stage1_ckpt_path: ""
+
+tags: ["stage2", "regressor"]
+
+train: True
+test: True
+
+ckpt_path: null
+seed: 42

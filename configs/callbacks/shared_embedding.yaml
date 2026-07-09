@@ -1,0 +1,6 @@
+shared_embedding:
+  _target_: src.utils.callbacks.shared_embedding_callback.SharedEmbeddingCallback
+  tsne_perplexity: 30.0
+  tsne_random_state: 42
+  log_interval_epochs: 1
+  n_tsne_samples: 1000

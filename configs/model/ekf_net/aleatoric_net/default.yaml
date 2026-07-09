@@ -1,8 +1,7 @@
-_target_: src.plugins.head.ekf.AleatoricNet
-aleatoric_hidden_dim: 32
-aleatoric_n_layers: 2
-aleatoric_activation: "silu"
-aleatoric_norm: "layer"
-aleatoric_input_mode: "xy"         # "xy" | "z_only" | "z_and_sep"
-aleatoric_xy_dim: 2               # dim of raw inputs (2 for toy: x1, x2)
-lambda_aleatoric: 1.0
+_target_: src.plugins.head.aleatoric.AleatoricHead
+hidden_dim: 32
+n_layers: 2
+activation: "silu"
+norm: "layer"
+input_mode: "xy"         # "xy" | "z_only" | "z_and_sep"
+xy_dim: 2               # dim of raw inputs (2 for toy: x1, x2)

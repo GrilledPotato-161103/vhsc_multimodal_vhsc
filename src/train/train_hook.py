@@ -176,7 +176,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             controller.add_breakpoint_by_name(net, item.layer_name, bp, item.pos)
 
     controller.to(device)
-    log.info("Breakpoints registered: %s", list(Breakpoint.list_of_breakpoints.keys()))
+    log.info(f"Breakpoints registered: {list(Breakpoint.list_of_breakpoints.keys())}")
 
     # Attach HookDAG controller to BreakpointController so downstream
     # code (LightningModule.on_save_checkpoint, etc.) can access it.
@@ -236,7 +236,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return metric_dict, object_dict
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="train_ekf_hook.yaml")
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="train_ekf_hook.yaml")
 def main(cfg: DictConfig) -> Optional[float]:
     """Main entry point for training.
 

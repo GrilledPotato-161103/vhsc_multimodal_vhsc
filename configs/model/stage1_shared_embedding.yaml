@@ -1,0 +1,24 @@
+_target_: src.models.modules.stage1_shared_embedding.SharedEmbeddingModule
+
+defaults:
+  - _self_
+  - net: shared_embedding_net
+
+contrastive_temperature: 0.1
+contrastive_weight: 1.0
+recon_weight: 1.0
+compile_model: false
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 1e-3
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 100
+  eta_min: 1e-6
+
+cache_path: ${paths.output_dir}/checkpoints/stage1_shared_embedding.pth

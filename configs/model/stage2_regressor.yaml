@@ -1,0 +1,30 @@
+# Stage 2 model config — assembled in train_stage2.py
+# because the stage1_net must be loaded from a checkpoint.
+
+_target_: src.models.modules.stage2_regressor.ManifoldRegressorModule
+
+# stage1_net is injected at runtime by the training script.
+# regressor_head is hydrated from the sub-config below.
+
+defaults:
+  - _self_
+  - regressor_head: regressor_head
+
+freeze_encoders: true
+loss_name: mse
+huber_delta: 1.0
+compile_model: false
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-3              # higher LR — only the small head is trained
+  weight_decay: 1e-3
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.5
+  patience: 5
+  min_lr: 1e-6

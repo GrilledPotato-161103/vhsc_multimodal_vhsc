@@ -1,0 +1,29 @@
+_target_: src.data.manifold_shared_datamodule.ProjectedManifoldDataModule
+
+n_samples: 128000
+n_src_samples: 256
+emb_dim: 512
+n_modals: 3
+d_proj: 128
+overlap_degree: 0.85
+batch_size: 128
+num_workers: 12
+
+val_ratio: 0.1
+test_ratio: 0.1
+
+# z_range defines the full latent support (test/eval domain).
+# When z_src_range is null, it is auto-computed from z_range * overlap_degree.
+z_range: [-1.0, 1.0]
+z_src_range: null
+
+noise_std: 0.1
+
+# Physics engine for regression target y
+physics: "lorenz96"
+physics_n_vars: 40
+physics_n_steps: 1500
+physics_dt: 0.01
+physics_burnin: 750
+
+seed: 42

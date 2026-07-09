@@ -1,0 +1,9 @@
+_target_: src.models.components.toy.MLP
+
+in_dim: 512           # matches shared_dim from Stage 1
+hidden_dims: [256, 128, 64]
+out_dim: 1
+activation: relu
+dropout: 0.2
+norm: layer
+residual: false
